@@ -1,9 +1,17 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import dynamic from 'next/dynamic';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { motion } from 'framer-motion';
 import ChatPanel from '@/components/ChatPanel';
-import OceanScene, { FloatTrajectory, OceanAnomaly, TransectPoint } from '@/components/OceanScene';
+import CustomCursor from '@/components/CustomCursor';
+import TiltCard from '@/components/TiltCard';
+import type { FloatTrajectory, OceanAnomaly, TransectPoint } from '@/components/OceanScene';
+
+const OceanScene = dynamic(() => import('@/components/OceanScene'), {
+  ssr: false,
+  loading: () => <div className="absolute inset-0 bg-[radial-gradient(circle_at_20%_20%,rgba(94,197,216,0.16),transparent_45%),var(--fc-canvas)]" />,
+});
 
 type Metric = { label: string; value: string; delta: string };
 type PipelineItem = { step: string; value: string; tone: 'cyan' | 'teal' | 'amber'; width: string };
@@ -15,6 +23,37 @@ type Transect = {
   grid: { depth: number; values: (number | null)[] }[];
 };
 
+const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
+
+function AnimatedMetricValue({ value }: { value: string }) {
+  const [displayValue, setDisplayValue] = useState(value);
+
+  useEffect(() => {
+    const numeric = Number(value.replace(/,/g, ''));
+    if (!Number.isFinite(numeric) || value === '—') {
+      setDisplayValue(value);
+      return;
+    }
+
+    const duration = 650;
+    const start = performance.now();
+    let frame = 0;
+
+    const tick = (now: number) => {
+      const progress = clamp((now - start) / duration, 0, 1);
+      setDisplayValue(Math.round(numeric * progress).toLocaleString());
+      if (progress < 1) {
+        frame = window.requestAnimationFrame(tick);
+      }
+    };
+
+    frame = window.requestAnimationFrame(tick);
+    return () => window.cancelAnimationFrame(frame);
+  }, [value]);
+
+  return <>{displayValue}</>;
+}
+
 export default function Page() {
   const [pipeline, setPipeline] = useState<PipelineItem[]>([]);
   const [pipelineTotal, setPipelineTotal] = useState('—');
@@ -24,6 +63,7 @@ export default function Page() {
     { label: 'Backend status', value: '—', delta: 'Checking connection' },
     { label: 'Last telemetry', value: '—', delta: 'Loading live state' },
   ]);
+  const [metricFlash, setMetricFlash] = useState<Record<string, number>>({});
   const [trajectories, setTrajectories] = useState<FloatTrajectory[]>([]);
   const [anomalies, setAnomalies] = useState<OceanAnomaly[]>([]);
   const [selectedAnomaly, setSelectedAnomaly] = useState<OceanAnomaly | null>(null);
@@ -31,6 +71,11 @@ export default function Page() {
   const [transect, setTransect] = useState<Transect | null>(null);
   const [transectLoading, setTransectLoading] = useState(true);
   const [drawnTransect, setDrawnTransect] = useState<TransectPoint[]>([]);
+  const [orientationPermissionNeeded, setOrientationPermissionNeeded] = useState(false);
+  const [orientationEnabled, setOrientationEnabled] = useState(false);
+  const [depthProgress, setDepthProgress] = useState(0);
+  const parallaxRef = useRef({ x: 0, y: 0 });
+  const parallaxTarget = useRef({ x: 0, y: 0 });
 
   useEffect(() => {
     let active = true;
@@ -83,12 +128,25 @@ export default function Page() {
         );
         if (active) setTrajectories(trajectoryResponses.filter((trajectory): trajectory is FloatTrajectory => Boolean(trajectory?.path?.length)));
         const timestamp = new Date(health.timestamp);
-        setMetrics([
+        const nextMetrics: Metric[] = [
           { label: 'Profiles ingested', value: Number(health.profiles ?? 0).toLocaleString(), delta: health.status === 'demo' ? 'Demo data' : 'Live backend' },
           { label: 'Detected anomalies', value: Number(anomalies.count ?? 0).toLocaleString(), delta: anomalies.status === 'demo' ? 'Demo data' : 'Latest scan' },
           { label: 'Backend status', value: health.status === 'ok' ? 'Online' : 'Demo', delta: health.service ?? 'FloatChat backend' },
           { label: 'Last telemetry', value: Number.isNaN(timestamp.getTime()) ? '—' : timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }), delta: 'UTC snapshot' },
-        ]);
+        ];
+        setMetrics((current) => {
+          const changedLabels = nextMetrics.filter((metric) => current.find((entry) => entry.label === metric.label)?.value !== metric.value).map((metric) => metric.label);
+          if (changedLabels.length > 0) {
+            setMetricFlash((state) => {
+              const next = { ...state };
+              changedLabels.forEach((label) => {
+                next[label] = (next[label] ?? 0) + 1;
+              });
+              return next;
+            });
+          }
+          return nextMetrics;
+        });
       } catch {
         if (active) setMetrics((current) => current.map((metric) => ({ ...metric, delta: 'Backend offline' })));
       }
@@ -101,6 +159,18 @@ export default function Page() {
       window.clearInterval(interval);
     };
   }, []);
+
+  useEffect(() => {
+    const timeouts = Object.entries(metricFlash).map(([label, token]) =>
+      window.setTimeout(() => {
+        setMetricFlash((current) => (current[label] === token ? { ...current, [label]: token - 1 } : current));
+      }, 920),
+    );
+
+    return () => {
+      timeouts.forEach((timeout) => window.clearTimeout(timeout));
+    };
+  }, [metricFlash]);
 
   useEffect(() => {
     let active = true;
@@ -121,6 +191,97 @@ export default function Page() {
     };
   }, [transectVariable]);
 
+  useEffect(() => {
+    let frame = 0;
+    const root = document.documentElement;
+
+    const loop = () => {
+      parallaxRef.current.x += (parallaxTarget.current.x - parallaxRef.current.x) * 0.08;
+      parallaxRef.current.y += (parallaxTarget.current.y - parallaxRef.current.y) * 0.08;
+      root.style.setProperty('--fc-parallax-x', `${parallaxRef.current.x.toFixed(4)}`);
+      root.style.setProperty('--fc-parallax-y', `${parallaxRef.current.y.toFixed(4)}`);
+      frame = window.requestAnimationFrame(loop);
+    };
+
+    frame = window.requestAnimationFrame(loop);
+    return () => window.cancelAnimationFrame(frame);
+  }, []);
+
+  useEffect(() => {
+    const supportsOrientation = typeof window !== 'undefined' && 'DeviceOrientationEvent' in window;
+    const coarsePointer = window.matchMedia('(pointer: coarse)').matches;
+
+    if (!supportsOrientation || !coarsePointer) {
+      const onMouseMove = (event: MouseEvent) => {
+        const x = (event.clientX / window.innerWidth - 0.5) * 2;
+        const y = (event.clientY / window.innerHeight - 0.5) * 2;
+        parallaxTarget.current.x = clamp(x, -1, 1);
+        parallaxTarget.current.y = clamp(y, -1, 1);
+      };
+      window.addEventListener('mousemove', onMouseMove, { passive: true });
+      return () => window.removeEventListener('mousemove', onMouseMove);
+    }
+
+    const onOrientation = (event: DeviceOrientationEvent) => {
+      const gamma = clamp((event.gamma ?? 0) / 28, -1, 1);
+      const beta = clamp((event.beta ?? 0) / 45, -1, 1);
+      parallaxTarget.current.x = gamma;
+      parallaxTarget.current.y = beta * 0.8;
+    };
+
+    const orientationWithPermission = DeviceOrientationEvent as typeof DeviceOrientationEvent & {
+      requestPermission?: () => Promise<'granted' | 'denied'>;
+    };
+
+    if (typeof orientationWithPermission.requestPermission === 'function') {
+      setOrientationPermissionNeeded(true);
+      return;
+    }
+
+    window.addEventListener('deviceorientation', onOrientation, true);
+    setOrientationEnabled(true);
+    return () => window.removeEventListener('deviceorientation', onOrientation, true);
+  }, []);
+
+  const requestOrientationPermission = async () => {
+    const orientationWithPermission = DeviceOrientationEvent as typeof DeviceOrientationEvent & {
+      requestPermission?: () => Promise<'granted' | 'denied'>;
+    };
+
+    if (typeof orientationWithPermission.requestPermission !== 'function') return;
+    const permission = await orientationWithPermission.requestPermission();
+    if (permission !== 'granted') return;
+
+    const onOrientation = (event: DeviceOrientationEvent) => {
+      const gamma = clamp((event.gamma ?? 0) / 28, -1, 1);
+      const beta = clamp((event.beta ?? 0) / 45, -1, 1);
+      parallaxTarget.current.x = gamma;
+      parallaxTarget.current.y = beta * 0.8;
+    };
+
+    window.addEventListener('deviceorientation', onOrientation, true);
+    setOrientationEnabled(true);
+    setOrientationPermissionNeeded(false);
+  };
+
+  useEffect(() => {
+    let ticking = false;
+    const onScroll = () => {
+      if (ticking) return;
+      ticking = true;
+      window.requestAnimationFrame(() => {
+        const progress = clamp(window.scrollY / (window.innerHeight * 1.45), 0, 1);
+        setDepthProgress(progress);
+        document.documentElement.style.setProperty('--fc-depth', progress.toFixed(4));
+        ticking = false;
+      });
+    };
+
+    onScroll();
+    window.addEventListener('scroll', onScroll, { passive: true });
+    return () => window.removeEventListener('scroll', onScroll);
+  }, []);
+
   const anomalyPrompt = selectedAnomaly
     ? `Explain the ${selectedAnomaly.variable ?? 'ocean'} anomaly near ${selectedAnomaly.lat.toFixed(2)}°N, ${selectedAnomaly.lon.toFixed(2)}°E at ${selectedAnomaly.depth}m.`
     : undefined;
@@ -128,14 +289,31 @@ export default function Page() {
   const transectMin = transectValues.length ? Math.min(...transectValues) : 0;
   const transectMax = transectValues.length ? Math.max(...transectValues) : 1;
 
+  const staggerParent = useMemo(
+    () => ({
+      hidden: { opacity: 0, y: 14 },
+      visible: {
+        opacity: 1,
+        y: 0,
+        transition: { staggerChildren: 0.1, delayChildren: 0.1 },
+      },
+    }),
+    [],
+  );
+
+  const staggerChild = useMemo(() => ({ hidden: { opacity: 0, y: 14 }, visible: { opacity: 1, y: 0, transition: { duration: 0.45 } } }), []);
+
   return (
-    <main className="relative min-h-screen overflow-hidden bg-[var(--fc-canvas)] text-[var(--fc-ink)]">
-      <div className="absolute inset-0">
-        <OceanScene trajectories={trajectories} anomalies={anomalies} onAnomalyClick={setSelectedAnomaly} onTransectDraw={setDrawnTransect} />
+    <motion.main initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: 0.7 }} className="relative min-h-screen overflow-hidden bg-[var(--fc-canvas)] text-[var(--fc-ink)] transition-colors duration-700">
+      <CustomCursor />
+
+      <div className="absolute inset-0 will-change-transform">
+        <OceanScene trajectories={trajectories} anomalies={anomalies} onAnomalyClick={setSelectedAnomaly} onTransectDraw={setDrawnTransect} parallaxRef={parallaxRef} depthProgress={depthProgress} />
       </div>
+      <div className="caustic-overlay" aria-hidden="true" />
 
       <div className="relative z-10 mx-auto flex min-h-screen max-w-[1500px] flex-col px-4 pb-10 pt-5 sm:px-6 lg:px-10">
-        <header className="mb-5 flex items-center justify-between gap-4 border-b border-[var(--fc-line)] bg-[var(--fc-canvas)]/80 px-1 py-3 backdrop-blur-md">
+        <motion.header initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.6 }} className="mb-5 flex items-center justify-between gap-4 border-b border-[var(--fc-line)] bg-[var(--fc-canvas)]/70 px-1 py-3 backdrop-blur-md">
           <div className="flex items-center gap-3">
             <div className="flex h-9 w-9 items-center justify-center rounded-md border border-[var(--fc-accent)]/50 bg-[var(--fc-accent)]/10 text-xs font-semibold text-[var(--fc-accent-strong)]">F</div>
             <div>
@@ -149,26 +327,25 @@ export default function Page() {
             <span>Transects</span>
             <span>Anomalies</span>
           </div>
-          <button className="rounded-md border border-[var(--fc-success)]/40 bg-[var(--fc-success)]/10 px-3 py-2 text-xs font-medium text-[var(--fc-success)] transition hover:bg-[var(--fc-success)]/20">
-            Live ingest on
-          </button>
-        </header>
+          <div className="flex items-center gap-2">
+            {orientationPermissionNeeded && (
+              <button type="button" onClick={requestOrientationPermission} className="rounded-md border border-[var(--fc-accent)]/40 bg-[var(--fc-accent)]/10 px-2.5 py-2 text-[11px] text-[var(--fc-accent-strong)]" data-cursor="interactive">
+                Enable gyro motion
+              </button>
+            )}
+            <button className="live-pill rounded-md border border-[var(--fc-success)]/40 bg-[var(--fc-success)]/10 px-3 py-2 text-xs font-medium text-[var(--fc-success)] transition hover:bg-[var(--fc-success)]/20" data-cursor="interactive">
+              Live ingest on
+            </button>
+          </div>
+        </motion.header>
+        {orientationEnabled && <div className="mb-3 text-right text-[10px] uppercase tracking-[0.12em] text-[var(--fc-ink-faint)]">Device parallax active</div>}
 
         <section className="grid flex-1 grid-cols-1 gap-6 lg:grid-cols-[1.2fr_0.8fr]">
-          <div className="flex min-h-[340px] flex-col justify-between gap-5">
-            <motion.div
-              initial={{ opacity: 0, y: 12 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.7 }}
-              className="panel max-w-[760px] rounded-lg p-6 md:p-8"
-            >
-              <div className="mb-4 inline-flex items-center gap-2 rounded-full border border-[var(--fc-accent)]/30 bg-[var(--fc-accent)]/10 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-[var(--fc-accent-strong)]">
-                Instrument overview
-              </div>
+          <motion.div initial={{ opacity: 0, y: 10 }} whileInView={{ opacity: 1, y: 0 }} viewport={{ once: true, amount: 0.2 }} transition={{ duration: 0.65 }} className="flex min-h-[340px] flex-col justify-between gap-5 parallax-soft">
+            <motion.div className="panel max-w-[760px] rounded-lg p-6 md:p-8" data-cursor="interactive">
+              <div className="mb-4 inline-flex items-center gap-2 rounded-full border border-[var(--fc-accent)]/30 bg-[var(--fc-accent)]/10 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-[var(--fc-accent-strong)]">Instrument overview</div>
 
-              <h1 className="max-w-[620px] text-3xl font-semibold leading-[1.1] tracking-[-0.04em] text-[var(--fc-ink)] md:text-4xl">
-                Read the water column in plain language.
-              </h1>
+              <h1 className="max-w-[620px] text-3xl font-semibold leading-[1.1] tracking-[-0.04em] text-[var(--fc-ink)] md:text-4xl">Read the water column in plain language.</h1>
 
               <p className="mt-4 max-w-[560px] text-sm leading-6 text-[var(--fc-ink-muted)] md:text-base">
                 Cross-correlate ARGO and BGC-Argo observations across temperature, salinity, oxygen, and chlorophyll with traceable semantic, SQL, LLM, and graph evidence.
@@ -180,36 +357,29 @@ export default function Page() {
               </div>
             </motion.div>
 
-            <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-              {metrics.map((metric, idx) => (
-                <motion.div
-                  key={metric.label}
-                  initial={{ opacity: 0, y: 18 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ delay: 0.1 * idx, duration: 0.5 }}
-                  className="panel rounded-md p-4"
-                >
-                  <div className="mb-2 text-[10px] font-semibold uppercase tracking-[0.12em] text-[var(--fc-ink-subtle)]">{metric.label}</div>
-                  <div className="mono text-2xl font-semibold tracking-[-0.04em] text-[var(--fc-ink)]">{metric.value}</div>
-                  <div className="mt-3 text-xs text-[var(--fc-accent)]">{metric.delta}</div>
+            <motion.div variants={staggerParent} initial="hidden" whileInView="visible" viewport={{ once: true, amount: 0.2 }} className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+              {metrics.map((metric) => (
+                <motion.div key={metric.label} variants={staggerChild}>
+                  <TiltCard className={`panel rounded-md p-4 transition duration-500 ${metricFlash[metric.label] > 0 ? 'metric-flash' : ''}`}>
+                    <div className="mb-2 text-[10px] font-semibold uppercase tracking-[0.12em] text-[var(--fc-ink-subtle)]">{metric.label}</div>
+                    <div className="mono text-2xl font-semibold tracking-[-0.04em] text-[var(--fc-ink)]">
+                      <AnimatedMetricValue value={metric.value} />
+                    </div>
+                    {metric.value === '—' ? <div className="wave-skeleton mt-3 h-3.5 w-28 rounded-full" /> : <div className="mt-3 text-xs text-[var(--fc-accent)]">{metric.delta}</div>}
+                  </TiltCard>
                 </motion.div>
               ))}
-            </div>
-          </div>
+            </motion.div>
+          </motion.div>
 
-          <motion.aside
-            initial={{ opacity: 0, x: 18 }}
-            animate={{ opacity: 1, x: 0 }}
-            transition={{ duration: 0.7, delay: 0.12 }}
-            className="relative overflow-hidden rounded-lg"
-          >
+          <motion.aside initial={{ opacity: 0, x: 16 }} whileInView={{ opacity: 1, x: 0 }} viewport={{ once: true, amount: 0.25 }} transition={{ duration: 0.7 }} className="relative overflow-hidden parallax-soft">
             <ChatPanel questionSeed={anomalyPrompt} />
             {selectedAnomaly && (
-              <button type="button" onClick={() => setSelectedAnomaly(null)} className="mt-2 text-left text-xs text-[var(--fc-warning)] hover:text-[var(--fc-accent-strong)]">
+              <button type="button" onClick={() => setSelectedAnomaly(null)} className="mt-2 text-left text-xs text-[var(--fc-warning)] hover:text-[var(--fc-accent-strong)]" data-cursor="interactive">
                 Anomaly loaded into chat · clear selection
               </button>
             )}
-            <div className="panel relative mt-6 overflow-hidden rounded-lg p-5">
+            <TiltCard className="panel relative mt-6 overflow-hidden rounded-lg p-5">
               <div className="mb-4 flex items-center justify-between gap-3">
                 <div>
                   <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-[var(--fc-ink-subtle)]">Pipeline trace</div>
@@ -220,21 +390,18 @@ export default function Page() {
 
               <div className="space-y-4">
                 {pipeline.map((item) => (
-                  <div key={item.step} className="data-line rounded-md border border-[var(--fc-line)] bg-[var(--fc-surface-inset)] p-3">
+                  <div key={item.step} className="rounded-md border border-[var(--fc-line)] bg-[var(--fc-surface-inset)] p-3">
                     <div className="flex items-center justify-between gap-3">
                       <div className="text-sm text-[var(--fc-ink-muted)]">{item.step}</div>
                       <div className="mono text-xs text-[var(--fc-ink-subtle)]">{item.value}</div>
                     </div>
                     <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-[var(--fc-surface-3)]">
-                      <div
-                        className={`h-full rounded-full ${
-                          item.tone === 'cyan'
-                            ? 'bg-[var(--fc-accent)]'
-                            : item.tone === 'teal'
-                              ? 'bg-[var(--fc-success)]'
-                              : 'bg-[var(--fc-warning)]'
-                        }`}
-                        style={{ width: item.width }}
+                      <motion.div
+                        key={`${item.step}-${item.width}`}
+                        initial={{ scaleX: 0 }}
+                        animate={{ scaleX: Number.parseFloat(item.width) / 100 }}
+                        transition={{ duration: 0.6, ease: 'easeOut' }}
+                        className={`h-full origin-left rounded-full ${item.tone === 'cyan' ? 'bg-[var(--fc-accent)]' : item.tone === 'teal' ? 'bg-[var(--fc-success)]' : 'bg-[var(--fc-warning)]'}`}
                       />
                     </div>
                   </div>
@@ -248,7 +415,9 @@ export default function Page() {
                     <>
                       <div>
                         <div className="text-lg font-semibold text-[var(--fc-ink)]">{selectedAnomaly.variable ?? 'Ocean'} event</div>
-                        <div className="mt-1 text-sm text-[var(--fc-ink-muted)]">{selectedAnomaly.lat.toFixed(2)}°N / {selectedAnomaly.lon.toFixed(2)}°E / {selectedAnomaly.depth}m</div>
+                        <div className="mt-1 text-sm text-[var(--fc-ink-muted)]">
+                          {selectedAnomaly.lat.toFixed(2)}°N / {selectedAnomaly.lon.toFixed(2)}°E / {selectedAnomaly.depth}m
+                        </div>
                       </div>
                       <div className="mono text-lg text-[var(--fc-warning)]">{(selectedAnomaly.severity ?? 0).toFixed(1)}σ</div>
                     </>
@@ -257,55 +426,65 @@ export default function Page() {
                   )}
                 </div>
               </div>
-            </div>
+            </TiltCard>
           </motion.aside>
         </section>
 
-        <section className="panel mt-6 rounded-lg p-5 md:p-6">
-          <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
-            <div>
-              <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-[var(--fc-ink-subtle)]">Observed transect</div>
-              <div className="mt-1 text-xl font-semibold text-[var(--fc-ink)]">Temperature / salinity cross-section</div>
-              <div className="mt-1 text-sm text-[var(--fc-ink-subtle)]">
-                Real profile measurements · distance along the observed route
-                {drawnTransect.length >= 2 && <span className="ml-2 text-[var(--fc-accent)]">· custom route {drawnTransect.length} points</span>}
+        <motion.section initial={{ opacity: 0, y: 18 }} whileInView={{ opacity: 1, y: 0 }} viewport={{ once: true, amount: 0.2 }} transition={{ duration: 0.65 }}>
+          <TiltCard className="panel mt-6 rounded-lg p-5 md:p-6 parallax-soft">
+            <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
+              <div>
+                <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-[var(--fc-ink-subtle)]">Observed transect</div>
+                <div className="mt-1 text-xl font-semibold text-[var(--fc-ink)]">Temperature / salinity cross-section</div>
+                <div className="mt-1 text-sm text-[var(--fc-ink-subtle)]">
+                  Real profile measurements · distance along the observed route
+                  {drawnTransect.length >= 2 && <span className="ml-2 text-[var(--fc-accent)]">· custom route {drawnTransect.length} points</span>}
+                </div>
               </div>
+              <label className="text-xs text-[var(--fc-ink-muted)]">
+                Variable
+                <select value={transectVariable} onChange={(event) => setTransectVariable(event.target.value as 'temperature' | 'salinity')} className="focus-ring ml-2 rounded-md border border-[var(--fc-line)] bg-[var(--fc-surface-inset)] px-3 py-2 text-sm text-[var(--fc-accent-strong)] outline-none" data-cursor="interactive">
+                  <option value="temperature">Temperature</option>
+                  <option value="salinity">Salinity</option>
+                </select>
+              </label>
             </div>
-            <label className="text-xs text-[var(--fc-ink-muted)]">
-              Variable
-              <select value={transectVariable} onChange={(event) => setTransectVariable(event.target.value as 'temperature' | 'salinity')} className="focus-ring ml-2 rounded-md border border-[var(--fc-line)] bg-[var(--fc-surface-inset)] px-3 py-2 text-sm text-[var(--fc-accent-strong)] outline-none">
-                <option value="temperature">Temperature</option>
-                <option value="salinity">Salinity</option>
-              </select>
-            </label>
-          </div>
 
-          {transectLoading ? (
-            <div className="data-line rounded-md border border-[var(--fc-line)] bg-[var(--fc-surface-inset)] p-8 text-center text-sm text-[var(--fc-ink-subtle)]">Loading observed section…</div>
-          ) : transect?.grid.length ? (
-            <div className="overflow-x-auto rounded-md border border-[var(--fc-line)] bg-[var(--fc-surface-inset)] p-3">
-              <div className="mb-2 flex justify-between text-[10px] text-[var(--fc-ink-subtle)]"><span>Surface</span><span>{transect.distance_km.at(-1)?.toFixed(1) ?? 0} km transect distance</span><span>Depth ↓</span></div>
-              <div className="min-w-[560px]">
-                {transect.grid.map((row) => (
-                  <div key={row.depth} className="flex h-3 gap-px">
-                    {row.values.map((value, index) => {
-                      const ratio = value == null ? 0 : (value - transectMin) / Math.max(transectMax - transectMin, 0.001);
-                      const palette = transectVariable === 'temperature'
-                        ? ['var(--fc-temp-1)', 'var(--fc-temp-2)', 'var(--fc-temp-3)', 'var(--fc-temp-4)', 'var(--fc-temp-5)']
-                        : ['var(--fc-sal-1)', 'var(--fc-sal-2)', 'var(--fc-sal-3)', 'var(--fc-sal-4)', 'var(--fc-sal-5)'];
-                      const color = value == null ? 'var(--fc-surface-3)' : palette[Math.min(4, Math.floor(Math.max(0, Math.min(1, ratio)) * 5))];
-                      return <div key={`${row.depth}-${index}`} title={`${row.depth}m · ${value == null ? 'no observation' : value.toFixed(3)}`} className="flex-1 rounded-[1px]" style={{ backgroundColor: color }} />;
-                    })}
-                  </div>
-                ))}
+            {transectLoading ? (
+              <div className="rounded-md border border-[var(--fc-line)] bg-[var(--fc-surface-inset)] p-8 text-center">
+                <div className="wave-skeleton mx-auto h-3.5 w-64 rounded-full" />
+                <div className="wave-skeleton mt-3 mx-auto h-2.5 w-40 rounded-full" />
               </div>
-              <div className="mt-2 flex justify-between text-[10px] text-[var(--fc-ink-subtle)]"><span>{transect.depths[0] ?? 0}m</span><span>{transect.depths.at(-1) ?? 0}m</span></div>
-            </div>
-          ) : (
-            <div className="rounded-md border border-[var(--fc-line)] bg-[var(--fc-surface-inset)] p-8 text-center text-sm text-[var(--fc-ink-subtle)]">No observed {transectVariable} measurements are available for a cross-section yet.</div>
-          )}
-        </section>
+            ) : transect?.grid.length ? (
+              <div className="overflow-x-auto rounded-md border border-[var(--fc-line)] bg-[var(--fc-surface-inset)] p-3">
+                <div className="mb-2 flex justify-between text-[10px] text-[var(--fc-ink-subtle)]">
+                  <span>Surface</span>
+                  <span>{transect.distance_km.at(-1)?.toFixed(1) ?? 0} km transect distance</span>
+                  <span>Depth ↓</span>
+                </div>
+                <div className="min-w-[560px]">
+                  {transect.grid.map((row) => (
+                    <div key={row.depth} className="flex h-3 gap-px">
+                      {row.values.map((value, index) => {
+                        const ratio = value == null ? 0 : (value - transectMin) / Math.max(transectMax - transectMin, 0.001);
+                        const palette = transectVariable === 'temperature' ? ['var(--fc-temp-1)', 'var(--fc-temp-2)', 'var(--fc-temp-3)', 'var(--fc-temp-4)', 'var(--fc-temp-5)'] : ['var(--fc-sal-1)', 'var(--fc-sal-2)', 'var(--fc-sal-3)', 'var(--fc-sal-4)', 'var(--fc-sal-5)'];
+                        const color = value == null ? 'var(--fc-surface-3)' : palette[Math.min(4, Math.floor(Math.max(0, Math.min(1, ratio)) * 5))];
+                        return <div key={`${row.depth}-${index}`} title={`${row.depth}m · ${value == null ? 'no observation' : value.toFixed(3)}`} className="flex-1 rounded-[1px] transition-opacity duration-300" style={{ backgroundColor: color }} />;
+                      })}
+                    </div>
+                  ))}
+                </div>
+                <div className="mt-2 flex justify-between text-[10px] text-[var(--fc-ink-subtle)]">
+                  <span>{transect.depths[0] ?? 0}m</span>
+                  <span>{transect.depths.at(-1) ?? 0}m</span>
+                </div>
+              </div>
+            ) : (
+              <div className="rounded-md border border-[var(--fc-line)] bg-[var(--fc-surface-inset)] p-8 text-center text-sm text-[var(--fc-ink-subtle)]">No observed {transectVariable} measurements are available for a cross-section yet.</div>
+            )}
+          </TiltCard>
+        </motion.section>
       </div>
-    </main>
+    </motion.main>
   );
 }
