@@ -1,0 +1,105 @@
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --fc-canvas: #070a0d;
+  --fc-surface-1: #0d1217;
+  --fc-surface-2: #121a21;
+  --fc-surface-3: #18232b;
+  --fc-surface-inset: #090d11;
+  --fc-line: #24313a;
+  --fc-line-strong: #344650;
+  --fc-ink: #e8f0f2;
+  --fc-ink-muted: #a5b6bc;
+  --fc-ink-subtle: #71838b;
+  --fc-ink-faint: #4a5b63;
+  --fc-focus: #79d9e8;
+  --fc-accent: #5ec5d8;
+  --fc-accent-strong: #8ae8f2;
+  --fc-success: #67d59a;
+  --fc-warning: #f0b86a;
+  --fc-danger: #f27672;
+  --fc-temp-1: #2d6cdf;
+  --fc-temp-2: #36b7d4;
+  --fc-temp-3: #f0d264;
+  --fc-temp-4: #f28a4b;
+  --fc-temp-5: #d94a55;
+  --fc-sal-1: #3b4cc0;
+  --fc-sal-2: #5e79d6;
+  --fc-sal-3: #65c7b0;
+  --fc-sal-4: #b6d95d;
+  --fc-sal-5: #e6e86a;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  margin: 0;
+  background: var(--fc-canvas);
+  color: var(--fc-ink);
+  font-family: 'IBM Plex Sans', sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+::selection {
+  background: rgba(124, 231, 255, 0.28);
+}
+
+.mono {
+  font-family: 'JetBrains Mono', monospace;
+  letter-spacing: 0.02em;
+}
+
+.panel {
+  background: var(--fc-surface-1);
+  border: 1px solid var(--fc-line);
+}
+
+.glow-ring {
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--fc-accent) 28%, transparent);
+}
+
+.data-line {
+  position: relative;
+  overflow: hidden;
+}
+
+.data-line::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--fc-accent) 18%, transparent), transparent);
+  transform: translateX(-100%);
+  animation: sweep 5s linear infinite;
+}
+
+.focus-ring:focus-visible,
+button:focus-visible,
+input:focus-visible,
+select:focus-visible {
+  outline: 2px solid var(--fc-focus);
+  outline-offset: 2px;
+}
+
+
+@keyframes sweep {
+  100% { transform: translateX(100%); }
+}
+
+@keyframes drift {
+  0% { transform: translate3d(0, 0, 0); }
+  50% { transform: translate3d(0, -10px, 0); }
+  100% { transform: translate3d(0, 0, 0); }
+}
+
+.floaty {
+  animation: drift 9s ease-in-out infinite;
+}

@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="220" height="180" viewBox="0 0 220 180">
+<rect width="100%" height="100%" fill="#020b13"/>
+<defs><marker id="arrow" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L0,6 L6,3 z" fill="#45d9ee"/></marker></defs>
+<text x="20" y="28" fill="#c8f7ff" font-family="Arial" font-size="16">FloatChat measured query pipeline</text>
+<rect x="20" y="55" width="190" height="70" rx="12" fill="#0d2635" stroke="#45d9ee"/>
+<text x="30" y="82" fill="#d8f8ff" font-family="Arial" font-size="11">No benchmark samples recorde</text>
+<text x="30" y="101" fill="#9fb8c4" font-family="Arial" font-size="10">d yet</text>
+<text x="20" y="155" fill="#f7c66b" font-family="Arial" font-size="11">total p50 0.0 ms · p95 0.0 ms · 0 samples</text>
+</svg>

@@ -1,0 +1,38 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: floatchat-postgres
+    environment:
+      POSTGRES_DB: floatchat
+      POSTGRES_USER: floatchat
+      POSTGRES_PASSWORD: floatchat
+    ports:
+      - "5432:5432"
+    volumes:
+      - floatchat-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U floatchat -d floatchat"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+  neo4j:
+    image: neo4j:5.26-community
+    container_name: floatchat-neo4j
+    environment:
+      NEO4J_AUTH: neo4j/floatchat
+    ports:
+      - "7474:7474"
+      - "7687:7687"
+    volumes:
+      - floatchat-neo4j:/data
+      - floatchat-neo4j-logs:/logs
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:7474 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  floatchat-postgres:
+  floatchat-neo4j:
+  floatchat-neo4j-logs:
