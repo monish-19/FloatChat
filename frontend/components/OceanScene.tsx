@@ -1,8 +1,8 @@
 'use client';
 
-import { Canvas, useFrame } from '@react-three/fiber';
+import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import { Line, PerspectiveCamera } from '@react-three/drei';
-import { useEffect, useMemo, useState } from 'react';
+import { MutableRefObject, useEffect, useMemo, useRef, useState } from 'react';
 import * as THREE from 'three';
 
 export type TrajectoryPoint = {
@@ -38,6 +38,8 @@ type OceanSceneProps = {
   anomalies?: OceanAnomaly[];
   onAnomalyClick?: (anomaly: OceanAnomaly) => void;
   onTransectDraw?: (points: TransectPoint[]) => void;
+  parallaxRef?: MutableRefObject<{ x: number; y: number }>;
+  depthProgress?: number;
 };
 
 type Bounds = {
@@ -49,8 +51,8 @@ type Bounds = {
 };
 
 const TOKENS = {
-  canvas: '#070A0D',
-  surfaceInset: '#090D11',
+  canvas: '#060B12',
+  surfaceInset: '#091420',
   line: '#24313A',
   inkMuted: '#A5B6BC',
   accent: '#5EC5D8',
@@ -144,7 +146,122 @@ function CurrentRibbon({ points }: { points: [number, number, number][] }) {
   });
 
   if (!geometry) return null;
-  return <mesh geometry={geometry} rotation={[0, 0, 0]}><meshBasicMaterial color={TOKENS.accent} transparent opacity={0.18} side={THREE.DoubleSide} /></mesh>;
+  return (
+    <mesh geometry={geometry} rotation={[0, 0, 0]}>
+      <meshBasicMaterial color={TOKENS.accent} transparent opacity={0.18} side={THREE.DoubleSide} />
+    </mesh>
+  );
+}
+
+function AmbientParticles() {
+  const points = useRef<THREE.Points>(null);
+  const particleCount = 360;
+  const { positions, seeds } = useMemo(() => {
+    const particlePositions = new Float32Array(particleCount * 3);
+    const particleSeeds = new Float32Array(particleCount);
+    for (let index = 0; index < particleCount; index += 1) {
+      particlePositions[index * 3] = (Math.random() - 0.5) * 11;
+      particlePositions[index * 3 + 1] = -2.2 + Math.random() * 5;
+      particlePositions[index * 3 + 2] = (Math.random() - 0.5) * 9;
+      particleSeeds[index] = Math.random() * 100;
+    }
+    return { positions: particlePositions, seeds: particleSeeds };
+  }, []);
+
+  useFrame(({ clock }) => {
+    const cloud = points.current;
+    if (!cloud) return;
+    const attribute = cloud.geometry.attributes.position as THREE.BufferAttribute;
+    for (let index = 0; index < particleCount; index += 1) {
+      const stride = index * 3;
+      const seed = seeds[index];
+      attribute.array[stride + 0] += Math.sin(clock.elapsedTime * 0.08 + seed) * 0.0008;
+      attribute.array[stride + 1] += Math.cos(clock.elapsedTime * 0.1 + seed * 0.6) * 0.0005;
+      attribute.array[stride + 2] += Math.sin(clock.elapsedTime * 0.09 + seed * 0.4) * 0.0008;
+      if (attribute.array[stride + 1] > 2.8) attribute.array[stride + 1] = -2.6;
+      if (attribute.array[stride + 1] < -2.8) attribute.array[stride + 1] = 2.6;
+    }
+    attribute.needsUpdate = true;
+  });
+
+  return (
+    <points ref={points}>
+      <bufferGeometry>
+        <bufferAttribute attach="attributes-position" count={positions.length / 3} array={positions} itemSize={3} />
+      </bufferGeometry>
+      <pointsMaterial color={TOKENS.accentStrong} size={0.04} transparent opacity={0.48} sizeAttenuation depthWrite={false} blending={THREE.AdditiveBlending} />
+    </points>
+  );
+}
+
+function CausticLayer() {
+  const material = useRef<THREE.ShaderMaterial>(null);
+
+  useFrame(({ clock }) => {
+    if (material.current) {
+      material.current.uniforms.uTime.value = clock.elapsedTime;
+    }
+  });
+
+  return (
+    <mesh position={[0, 1.3, -1.2]} rotation={[-Math.PI / 2, 0, 0]}>
+      <planeGeometry args={[10, 8, 1, 1]} />
+      <shaderMaterial
+        ref={material}
+        transparent
+        depthWrite={false}
+        blending={THREE.AdditiveBlending}
+        uniforms={{ uTime: { value: 0 }, uTint: { value: new THREE.Color('#48c4d5') } }}
+        vertexShader={`
+          varying vec2 vUv;
+          void main() {
+            vUv = uv;
+            gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+          }
+        `}
+        fragmentShader={`
+          uniform float uTime;
+          uniform vec3 uTint;
+          varying vec2 vUv;
+          void main() {
+            float waveA = sin((vUv.x * 15.0) + (uTime * 0.75));
+            float waveB = cos((vUv.y * 17.0) - (uTime * 0.65));
+            float ripple = smoothstep(0.78, 1.5, (waveA * waveB + 1.0));
+            float edgeFade = smoothstep(0.0, 0.15, vUv.x) * smoothstep(0.0, 0.15, 1.0 - vUv.x) * smoothstep(0.0, 0.2, vUv.y);
+            gl_FragColor = vec4(uTint, ripple * 0.09 * edgeFade);
+          }
+        `}
+      />
+    </mesh>
+  );
+}
+
+function SceneRig({ parallaxRef, depthProgress }: { parallaxRef?: MutableRefObject<{ x: number; y: number }>; depthProgress: number }) {
+  const rig = useRef<THREE.Group>(null);
+  const { camera, gl } = useThree();
+  const deepColor = useMemo(() => new THREE.Color('#020713'), []);
+  const surfaceColor = useMemo(() => new THREE.Color(TOKENS.canvas), []);
+  const mix = useMemo(() => new THREE.Color(TOKENS.canvas), []);
+
+  useFrame(() => {
+    const targetX = parallaxRef?.current.x ?? 0;
+    const targetY = parallaxRef?.current.y ?? 0;
+    if (rig.current) {
+      rig.current.rotation.x = THREE.MathUtils.lerp(rig.current.rotation.x, targetY * 0.08, 0.05);
+      rig.current.rotation.y = THREE.MathUtils.lerp(rig.current.rotation.y, targetX * -0.12, 0.05);
+      rig.current.position.x = THREE.MathUtils.lerp(rig.current.position.x, targetX * -0.25, 0.04);
+      rig.current.position.y = THREE.MathUtils.lerp(rig.current.position.y, -depthProgress * 0.4, 0.04);
+    }
+
+    camera.position.y = THREE.MathUtils.lerp(camera.position.y, 0.5 - depthProgress * 0.55 + targetY * 0.08, 0.04);
+    camera.position.z = THREE.MathUtils.lerp(camera.position.z, 6.8 - depthProgress * 0.85, 0.04);
+    camera.lookAt(0, -0.15 - depthProgress * 0.3, 0);
+
+    mix.copy(surfaceColor).lerp(deepColor, depthProgress);
+    gl.setClearColor(mix, 1);
+  });
+
+  return <group ref={rig} />;
 }
 
 function TrajectoryLayer({ trajectories, anomalies, cursor, showAnomalies, drawing, onAnomalyClick, onDrawPoint }: { trajectories: FloatTrajectory[]; anomalies: OceanAnomaly[]; cursor: number; showAnomalies: boolean; drawing: boolean; onAnomalyClick?: (anomaly: OceanAnomaly) => void; onDrawPoint: (point: TransectPoint) => void }) {
@@ -169,9 +286,11 @@ function TrajectoryLayer({ trajectories, anomalies, cursor, showAnomalies, drawi
     const y = 1.65 - clamp(point.depth / Math.max(bounds.maxDepth, 1), 0, 1) * 3.4;
     return [x, y, z];
   };
+
   const currentTimestamp = timeline[0] + (timeline[1] - timeline[0]) * cursor;
   const surfaceY = 1.65;
   const drawPlaneSize = 12;
+
   const drawPoint = (point: THREE.Vector3) => ({
     lat: bounds.minLat + ((point.z / 4.2 + 0.5) * Math.max(bounds.maxLat - bounds.minLat, 0.001)),
     lon: bounds.minLon + ((point.x / 6.4 + 0.5) * Math.max(bounds.maxLon - bounds.minLon, 0.001)),
@@ -202,38 +321,78 @@ function TrajectoryLayer({ trajectories, anomalies, cursor, showAnomalies, drawi
         const ribbonPoints = items.map((item) => item.position);
         return (
           <group key={trajectory.float_id}>
-            {items.slice(1).map((item, index) => <Line key={`${trajectory.float_id}-segment-${index}`} points={[items[index].position, item.position]} color={temperatureColor(item.point.temperature, temperatureRange)} transparent opacity={0.86} lineWidth={1.6} />)}
-            {latest && <><FloatHousing position={latest.position} rotation={rotation} color={color} /><SurfaceBuoy position={[latest.position[0], surfaceY, latest.position[2]]} tetherTo={latest.position} color={color} /><CurrentRibbon points={ribbonPoints} /></>}
+            {items.slice(1).map((item, index) => (
+              <Line key={`${trajectory.float_id}-segment-${index}`} points={[items[index].position, item.position]} color={temperatureColor(item.point.temperature, temperatureRange)} transparent opacity={0.86} lineWidth={1.6} />
+            ))}
+            {latest && (
+              <>
+                <FloatHousing position={latest.position} rotation={rotation} color={color} />
+                <SurfaceBuoy position={[latest.position[0], surfaceY, latest.position[2]]} tetherTo={latest.position} color={color} />
+                <CurrentRibbon points={ribbonPoints} />
+              </>
+            )}
           </group>
         );
       })}
-      {showAnomalies && anomalies.map((anomaly, index) => {
-        const severe = (anomaly.severity ?? 1) >= 3;
-        return <mesh key={`${anomaly.float_id ?? 'anomaly'}-${anomaly.time ?? index}`} position={mapPoint(anomaly)} scale={1 + clamp(anomaly.severity ?? 1, 0, 5) * 0.08} onClick={(event) => { event.stopPropagation(); onAnomalyClick?.(anomaly); }}>
-          <octahedronGeometry args={[0.12, 1]} />
-          <meshStandardMaterial color={severe ? TOKENS.danger : TOKENS.warning} emissive={severe ? TOKENS.danger : TOKENS.warning} emissiveIntensity={2.2} />
-        </mesh>;
-      })}
+      {showAnomalies &&
+        anomalies.map((anomaly, index) => {
+          const severe = (anomaly.severity ?? 1) >= 3;
+          return (
+            <mesh
+              key={`${anomaly.float_id ?? 'anomaly'}-${anomaly.time ?? index}`}
+              position={mapPoint(anomaly)}
+              scale={1 + clamp(anomaly.severity ?? 1, 0, 5) * 0.08}
+              onClick={(event) => {
+                event.stopPropagation();
+                onAnomalyClick?.(anomaly);
+              }}
+            >
+              <octahedronGeometry args={[0.12, 1]} />
+              <meshStandardMaterial color={severe ? TOKENS.danger : TOKENS.warning} emissive={severe ? TOKENS.danger : TOKENS.warning} emissiveIntensity={2.2} />
+            </mesh>
+          );
+        })}
     </group>
   );
 }
 
 function TimelineControls({ cursor, playing, showAnomalies, drawing, onCursorChange, onPlayingChange, onAnomalyToggle, onDrawToggle, hasData }: { cursor: number; playing: boolean; showAnomalies: boolean; drawing: boolean; onCursorChange: (value: number) => void; onPlayingChange: (value: boolean) => void; onAnomalyToggle: () => void; onDrawToggle: () => void; hasData: boolean }) {
-  return <div className="pointer-events-auto absolute bottom-5 left-5 w-[min(380px,calc(100%-2.5rem))] rounded-lg border border-[var(--fc-line)] bg-[var(--fc-surface-1)]/95 p-3 text-[var(--fc-ink)] shadow-lg backdrop-blur-md">
-    <div className="mb-2 flex items-center justify-between gap-3">
-      <span className="font-mono text-[10px] uppercase tracking-[0.16em] text-[var(--fc-ink-muted)]">Trajectory timeline</span>
-      <div className="flex gap-2">
-        <button type="button" onClick={onAnomalyToggle} className="rounded border border-[var(--fc-line)] px-2 py-1 text-[11px] text-[var(--fc-ink-muted)] hover:border-[var(--fc-line-strong)] hover:text-[var(--fc-ink)]">{showAnomalies ? 'Hide anomalies' : 'Show anomalies'}</button>
-        <button type="button" onClick={onDrawToggle} className={`rounded border px-2 py-1 text-[11px] ${drawing ? 'border-[var(--fc-accent)] bg-[var(--fc-accent)]/10 text-[var(--fc-accent-strong)]' : 'border-[var(--fc-line)] text-[var(--fc-ink-muted)]'}`}>{drawing ? 'Finish transect' : 'Draw transect'}</button>
-        {hasData && <button type="button" onClick={() => { if (!playing && cursor >= 1) onCursorChange(0); onPlayingChange(!playing); }} className="rounded border border-[var(--fc-accent)]/60 px-2 py-1 text-[11px] text-[var(--fc-accent-strong)]">{playing ? 'Pause' : 'Play'}</button>}
+  return (
+    <div className="pointer-events-auto absolute bottom-5 left-5 w-[min(380px,calc(100%-2.5rem))] rounded-lg border border-[var(--fc-line)] bg-[var(--fc-surface-1)]/90 p-3 text-[var(--fc-ink)] shadow-lg backdrop-blur-md transition duration-500">
+      <div className="mb-2 flex items-center justify-between gap-3">
+        <span className="font-mono text-[10px] uppercase tracking-[0.16em] text-[var(--fc-ink-muted)]">Trajectory timeline</span>
+        <div className="flex gap-2">
+          <button type="button" onClick={onAnomalyToggle} className="rounded border border-[var(--fc-line)] px-2 py-1 text-[11px] text-[var(--fc-ink-muted)] hover:border-[var(--fc-line-strong)] hover:text-[var(--fc-ink)]">
+            {showAnomalies ? 'Hide anomalies' : 'Show anomalies'}
+          </button>
+          <button type="button" onClick={onDrawToggle} className={`rounded border px-2 py-1 text-[11px] ${drawing ? 'border-[var(--fc-accent)] bg-[var(--fc-accent)]/10 text-[var(--fc-accent-strong)]' : 'border-[var(--fc-line)] text-[var(--fc-ink-muted)]'}`}>
+            {drawing ? 'Finish transect' : 'Draw transect'}
+          </button>
+          {hasData && (
+            <button
+              type="button"
+              onClick={() => {
+                if (!playing && cursor >= 1) onCursorChange(0);
+                onPlayingChange(!playing);
+              }}
+              className="rounded border border-[var(--fc-accent)]/60 px-2 py-1 text-[11px] text-[var(--fc-accent-strong)]"
+            >
+              {playing ? 'Pause' : 'Play'}
+            </button>
+          )}
+        </div>
+      </div>
+      <input aria-label="Trajectory timeline" type="range" min="0" max="1" step="0.001" value={cursor} disabled={!hasData} onChange={(event) => onCursorChange(Number(event.target.value))} className="w-full accent-[var(--fc-accent)] disabled:opacity-40" />
+      <div className="mt-1 flex justify-between font-mono text-[10px] text-[var(--fc-ink-muted)]">
+        <span>earliest</span>
+        <span>{hasData ? `${Math.round(cursor * 100)}%` : 'waiting for telemetry'}</span>
+        <span>latest</span>
       </div>
     </div>
-    <input aria-label="Trajectory timeline" type="range" min="0" max="1" step="0.001" value={cursor} disabled={!hasData} onChange={(event) => onCursorChange(Number(event.target.value))} className="w-full accent-[var(--fc-accent)] disabled:opacity-40" />
-    <div className="mt-1 flex justify-between font-mono text-[10px] text-[var(--fc-ink-muted)]"><span>earliest</span><span>{hasData ? `${Math.round(cursor * 100)}%` : 'waiting for telemetry'}</span><span>latest</span></div>
-  </div>;
+  );
 }
 
-export default function OceanScene({ trajectories = [], anomalies = [], onAnomalyClick, onTransectDraw }: OceanSceneProps) {
+export default function OceanScene({ trajectories = [], anomalies = [], onAnomalyClick, onTransectDraw, parallaxRef, depthProgress = 0 }: OceanSceneProps) {
   const [cursor, setCursor] = useState(1);
   const [playing, setPlaying] = useState(false);
   const [showAnomalies, setShowAnomalies] = useState(true);
@@ -242,39 +401,62 @@ export default function OceanScene({ trajectories = [], anomalies = [], onAnomal
 
   useEffect(() => {
     if (!playing || trajectories.length === 0) return;
-    const interval = window.setInterval(() => setCursor((current) => { const next = current + 0.008; if (next >= 1) { setPlaying(false); return 1; } return next; }), 60);
+    const interval = window.setInterval(() =>
+      setCursor((current) => {
+        const next = current + 0.008;
+        if (next >= 1) {
+          setPlaying(false);
+          return 1;
+        }
+        return next;
+      }),
+    60);
     return () => window.clearInterval(interval);
   }, [playing, trajectories.length]);
 
   useEffect(() => {
-    if (trajectories.length === 0) { setPlaying(false); setCursor(1); }
+    if (trajectories.length === 0) {
+      setPlaying(false);
+      setCursor(1);
+    }
   }, [trajectories.length]);
 
   const hasData = trajectories.some((trajectory) => trajectory.path.length > 0);
-  return <div className="absolute inset-0">
-    <Canvas dpr={[1, 1.8]}>
-      <color attach="background" args={[TOKENS.canvas]} />
-      <PerspectiveCamera makeDefault position={[0, 0.5, 6.8]} fov={42} />
-      <ambientLight intensity={0.8} />
-      <directionalLight position={[2, 5, 4]} intensity={1.1} color={TOKENS.accentStrong} />
-      <TrajectoryLayer trajectories={trajectories} anomalies={anomalies} cursor={cursor} showAnomalies={showAnomalies} drawing={drawing} onAnomalyClick={onAnomalyClick} onDrawPoint={(point) => setDrawPoints((current) => [...current, point])} />
-      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -2.2, 0]}><circleGeometry args={[5.5, 64]} /><meshStandardMaterial color={TOKENS.surfaceInset} transparent opacity={0.75} /></mesh>
-    </Canvas>
-    {!hasData && <div className="pointer-events-none absolute left-1/2 top-[42%] -translate-x-1/2 rounded-md border border-[var(--fc-line)] bg-[var(--fc-surface-inset)]/90 px-3 py-2 text-center font-mono text-[10px] uppercase tracking-[0.12em] text-[var(--fc-ink-subtle)]">No trajectory data</div>}
-    <TimelineControls
-      cursor={cursor}
-      playing={playing}
-      showAnomalies={showAnomalies}
-      drawing={drawing}
-      onCursorChange={setCursor}
-      onPlayingChange={setPlaying}
-      onAnomalyToggle={() => setShowAnomalies((value) => !value)}
-      onDrawToggle={() => {
-        if (drawing && drawPoints.length >= 2) onTransectDraw?.(drawPoints);
-        setDrawing((value) => !value);
-        if (drawing) setDrawPoints([]);
-      }}
-      hasData={hasData}
-    />
-  </div>;
+
+  return (
+    <div className="absolute inset-0">
+      <Canvas dpr={[1, 1.8]}>
+        <PerspectiveCamera makeDefault position={[0, 0.5, 6.8]} fov={42} />
+        <ambientLight intensity={0.75} />
+        <directionalLight position={[2, 5, 4]} intensity={1.1} color={TOKENS.accentStrong} />
+        <pointLight position={[-1.6, 2.3, 1]} intensity={0.7} color={TOKENS.accent} />
+        <SceneRig parallaxRef={parallaxRef} depthProgress={depthProgress} />
+        <group>
+          <AmbientParticles />
+          <CausticLayer />
+          <TrajectoryLayer trajectories={trajectories} anomalies={anomalies} cursor={cursor} showAnomalies={showAnomalies} drawing={drawing} onAnomalyClick={onAnomalyClick} onDrawPoint={(point) => setDrawPoints((current) => [...current, point])} />
+          <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -2.2, 0]}>
+            <circleGeometry args={[5.5, 64]} />
+            <meshStandardMaterial color={TOKENS.surfaceInset} transparent opacity={0.75} />
+          </mesh>
+        </group>
+      </Canvas>
+      {!hasData && <div className="pointer-events-none absolute left-1/2 top-[42%] -translate-x-1/2 rounded-md border border-[var(--fc-line)] bg-[var(--fc-surface-inset)]/90 px-3 py-2 text-center font-mono text-[10px] uppercase tracking-[0.12em] text-[var(--fc-ink-subtle)]">No trajectory data</div>}
+      <TimelineControls
+        cursor={cursor}
+        playing={playing}
+        showAnomalies={showAnomalies}
+        drawing={drawing}
+        onCursorChange={setCursor}
+        onPlayingChange={setPlaying}
+        onAnomalyToggle={() => setShowAnomalies((value) => !value)}
+        onDrawToggle={() => {
+          if (drawing && drawPoints.length >= 2) onTransectDraw?.(drawPoints);
+          setDrawing((value) => !value);
+          if (drawing) setDrawPoints([]);
+        }}
+        hasData={hasData}
+      />
+    </div>
+  );
 }
