@@ -1,10 +1,12 @@
 'use client';
 
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
-import { Line, PerspectiveCamera } from '@react-three/drei';
+import { Line, PerspectiveCamera, OrbitControls } from '@react-three/drei';
+import { EffectComposer, Bloom } from '@react-three/postprocessing';
 import { MutableRefObject, useEffect, useMemo, useRef, useState } from 'react';
 import * as THREE from 'three';
 
+/* ── Public types ─────────────────────────────────────────── */
 export type TrajectoryPoint = {
   lat: number;
   lon: number;
@@ -36,182 +38,264 @@ export type TransectPoint = { lat: number; lon: number };
 type OceanSceneProps = {
   trajectories?: FloatTrajectory[];
   anomalies?: OceanAnomaly[];
-  onAnomalyClick?: (anomaly: OceanAnomaly) => void;
+  onAnomalyClick?: (anomaly: OceanAnomaly, screenPos: { x: number; y: number }) => void;
   onTransectDraw?: (points: TransectPoint[]) => void;
   parallaxRef?: MutableRefObject<{ x: number; y: number }>;
-  depthProgress?: number;
+  cursorProp?: number;
+  playing?: boolean;
+  onCursorChange?: (v: number) => void;
+  onPlayingChange?: (v: boolean) => void;
+  drawing?: boolean;
 };
 
 type Bounds = {
-  minLat: number;
-  maxLat: number;
-  minLon: number;
-  maxLon: number;
+  minLat: number; maxLat: number;
+  minLon: number; maxLon: number;
   maxDepth: number;
 };
 
-const TOKENS = {
-  canvas: '#060B12',
-  surfaceInset: '#091420',
-  line: '#24313A',
-  inkMuted: '#A5B6BC',
-  accent: '#5EC5D8',
-  accentStrong: '#8AE8F2',
-  warning: '#F0B86A',
-  danger: '#F27672',
-  tempCool: '#2D6CDF',
-  tempWarm: '#D94A55',
+/* ── Design tokens (matches globals.css) ──────────────────── */
+const T = {
+  abyss950: '#030711',
+  abyss900: '#0a1220',
+  abyss800: '#131e30',
+  bio400:   '#2dd4bf',
+  bio300:   '#5eead4',
+  coral400: '#fb7185',
+  amber400: '#fbbf24',
+  foam100:  '#e8f1f5',
+  foam400:  '#7d94a3',
+  tempCool: '#2d6cdf',
+  tempWarm: '#d94a55',
 } as const;
 
-const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
+const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
 
 function temperatureColor(value: number | null | undefined, range: [number, number]) {
-  if (value == null || !Number.isFinite(value)) return new THREE.Color(TOKENS.accent);
-  const normalized = clamp((value - range[0]) / Math.max(range[1] - range[0], 0.001), 0, 1);
-  return new THREE.Color(TOKENS.tempCool).lerp(new THREE.Color(TOKENS.tempWarm), normalized);
+  if (value == null || !Number.isFinite(value)) return new THREE.Color(T.bio400);
+  const n = clamp((value - range[0]) / Math.max(range[1] - range[0], 0.001), 0, 1);
+  return new THREE.Color(T.tempCool).lerp(new THREE.Color(T.tempWarm), n);
 }
 
-function FloatHousing({ position, rotation, color }: { position: [number, number, number]; rotation: [number, number, number]; color: THREE.Color }) {
+/* ─────────────────────────────────────────────────────────────
+   PROCEDURAL ARGO FLOAT HOUSING
+   img2threejs spec: cylindrical aluminium body, sensor dome,
+   drogue cone, antenna fin, breathing LED ring.
+───────────────────────────────────────────────────────────── */
+function FloatHousing({
+  position,
+  rotation,
+  color,
+}: {
+  position: [number, number, number];
+  rotation: [number, number, number];
+  color: THREE.Color;
+}) {
+  const ledRef = useRef<THREE.Mesh>(null);
+  const domeRef = useRef<THREE.Mesh>(null);
+
+  useFrame(({ clock }) => {
+    // LED ring breathes — slow sine, not color cycling
+    const breathe = 0.5 + 0.5 * Math.sin(clock.elapsedTime * 1.4);
+    if (ledRef.current) {
+      (ledRef.current.material as THREE.MeshStandardMaterial).emissiveIntensity =
+        0.6 + breathe * 1.2;
+    }
+    if (domeRef.current) {
+      (domeRef.current.material as THREE.MeshPhysicalMaterial).emissiveIntensity =
+        0.08 + breathe * 0.18;
+    }
+  });
+
   return (
     <group position={position} rotation={rotation}>
+      {/* Main cylindrical body — dark anodised aluminium */}
       <mesh>
-        <cylinderGeometry args={[0.105, 0.13, 0.62, 16]} />
-        <meshStandardMaterial color={TOKENS.surfaceInset} metalness={0.75} roughness={0.28} />
+        <cylinderGeometry args={[0.095, 0.115, 0.56, 20]} />
+        <meshStandardMaterial
+          color={T.abyss800}
+          metalness={0.82}
+          roughness={0.22}
+        />
       </mesh>
-      <mesh position={[0, 0.32, 0]}>
-        <sphereGeometry args={[0.105, 16, 8]} />
-        <meshStandardMaterial color={color} emissive={color} emissiveIntensity={0.55} />
+
+      {/* Top sensor dome — tinted glass with transmission */}
+      <mesh ref={domeRef} position={[0, 0.3, 0]}>
+        <sphereGeometry args={[0.095, 20, 12, 0, Math.PI * 2, 0, Math.PI / 2]} />
+        <meshPhysicalMaterial
+          color={color}
+          emissive={color}
+          emissiveIntensity={0.12}
+          metalness={0.1}
+          roughness={0.05}
+          transmission={0.55}
+          thickness={0.4}
+          transparent
+          opacity={0.85}
+        />
       </mesh>
-      <mesh position={[0, -0.32, 0]}>
-        <coneGeometry args={[0.13, 0.18, 16]} />
-        <meshStandardMaterial color={TOKENS.line} metalness={0.65} roughness={0.3} />
+
+      {/* LED status ring — bioluminescent bio-400 glow */}
+      <mesh ref={ledRef} position={[0, 0.22, 0]}>
+        <torusGeometry args={[0.097, 0.008, 8, 40]} />
+        <meshStandardMaterial
+          color={color}
+          emissive={color}
+          emissiveIntensity={1.2}
+          roughness={0.3}
+        />
       </mesh>
-      <mesh position={[0, 0.04, 0.105]}>
-        <boxGeometry args={[0.12, 0.15, 0.018]} />
-        <meshStandardMaterial color={color} emissive={color} emissiveIntensity={0.35} />
+
+      {/* Bottom drogue cone */}
+      <mesh position={[0, -0.3, 0]}>
+        <coneGeometry args={[0.115, 0.16, 20]} />
+        <meshStandardMaterial
+          color={T.abyss900}
+          metalness={0.65}
+          roughness={0.3}
+        />
+      </mesh>
+
+      {/* Antenna fin */}
+      <mesh position={[0, 0.06, 0.098]}>
+        <boxGeometry args={[0.014, 0.18, 0.024]} />
+        <meshStandardMaterial
+          color={T.abyss950}
+          metalness={0.4}
+          roughness={0.7}
+        />
+      </mesh>
+
+      {/* Pressure sensor nub */}
+      <mesh position={[0, -0.14, 0.098]}>
+        <cylinderGeometry args={[0.018, 0.018, 0.04, 10]} />
+        <meshStandardMaterial
+          color={T.bio400}
+          emissive={T.bio400}
+          emissiveIntensity={0.4}
+        />
       </mesh>
     </group>
   );
 }
 
-function SurfaceBuoy({ position, tetherTo, color }: { position: [number, number, number]; tetherTo: [number, number, number]; color: THREE.Color }) {
+/* ─────────────────────────────────────────────────────────────
+   SURFACE BUOY with tether
+───────────────────────────────────────────────────────────── */
+function SurfaceBuoy({
+  position,
+  tetherTo,
+  color,
+}: {
+  position: [number, number, number];
+  tetherTo: [number, number, number];
+  color: THREE.Color;
+}) {
+  const beaconRef = useRef<THREE.Mesh>(null);
+
+  useFrame(({ clock }) => {
+    if (beaconRef.current) {
+      (beaconRef.current.material as THREE.MeshStandardMaterial).emissiveIntensity =
+        0.8 + 0.6 * Math.sin(clock.elapsedTime * 2.1);
+    }
+  });
+
   return (
     <group>
-      <Line points={[position, tetherTo]} color={TOKENS.inkMuted} transparent opacity={0.42} lineWidth={0.7} />
+      {/* Tether line */}
+      <Line
+        points={[position, tetherTo]}
+        color={T.foam400}
+        transparent
+        opacity={0.3}
+        lineWidth={0.5}
+      />
       <group position={position}>
+        {/* Buoy body */}
         <mesh>
-          <sphereGeometry args={[0.13, 16, 10]} />
-          <meshStandardMaterial color={TOKENS.accentStrong} emissive={color} emissiveIntensity={0.7} />
+          <sphereGeometry args={[0.11, 18, 12]} />
+          <meshStandardMaterial
+            color={T.abyss800}
+            metalness={0.7}
+            roughness={0.25}
+            emissive={color}
+            emissiveIntensity={0.1}
+          />
         </mesh>
-        <mesh position={[0, 0.17, 0]}>
-          <cylinderGeometry args={[0.025, 0.025, 0.2, 8]} />
-          <meshStandardMaterial color={TOKENS.line} metalness={0.6} />
+        {/* Mast */}
+        <mesh position={[0, 0.16, 0]}>
+          <cylinderGeometry args={[0.012, 0.012, 0.18, 8]} />
+          <meshStandardMaterial color={T.foam400} metalness={0.5} />
         </mesh>
-        <mesh position={[0, 0.29, 0]}>
-          <sphereGeometry args={[0.045, 10, 6]} />
-          <meshStandardMaterial color={color} emissive={color} emissiveIntensity={1.2} />
+        {/* Beacon */}
+        <mesh ref={beaconRef} position={[0, 0.27, 0]}>
+          <sphereGeometry args={[0.025, 10, 8]} />
+          <meshStandardMaterial
+            color={color}
+            emissive={color}
+            emissiveIntensity={1.0}
+          />
         </mesh>
       </group>
     </group>
   );
 }
 
+/* ─────────────────────────────────────────────────────────────
+   CURRENT / FLOW RIBBON
+   Animated shader ribbon following trajectory points.
+───────────────────────────────────────────────────────────── */
 function CurrentRibbon({ points }: { points: [number, number, number][] }) {
+  const meshRef = useRef<THREE.Mesh>(null);
+  const matRef = useRef<THREE.ShaderMaterial>(null);
+
   const geometry = useMemo(() => {
     if (points.length < 2) return null;
-    const vertices: number[] = [];
-    const width = 0.055;
-    points.forEach((point, index) => {
-      const previous = points[Math.max(0, index - 1)];
-      const next = points[Math.min(points.length - 1, index + 1)];
-      const tangent = new THREE.Vector3(next[0] - previous[0], 0, next[2] - previous[2]).normalize();
-      const normal = new THREE.Vector3(-tangent.z, 0, tangent.x).multiplyScalar(width);
-      vertices.push(point[0] - normal.x, point[1] + 0.025, point[2] - normal.z);
-      vertices.push(point[0] + normal.x, point[1] + 0.025, point[2] + normal.z);
+    const w = 0.04;
+    const verts: number[] = [];
+    const uvs: number[] = [];
+    points.forEach((pt, i) => {
+      const prev = points[Math.max(0, i - 1)];
+      const next = points[Math.min(points.length - 1, i + 1)];
+      const tan = new THREE.Vector3(
+        next[0] - prev[0], 0, next[2] - prev[2]
+      ).normalize();
+      const nor = new THREE.Vector3(-tan.z, 0, tan.x).multiplyScalar(w);
+      const t = i / (points.length - 1);
+      const fadeW = Math.sin(t * Math.PI) * w; // fade at ends
+      verts.push(
+        pt[0] - nor.x * (fadeW / w), pt[1] + 0.018, pt[2] - nor.z * (fadeW / w),
+        pt[0] + nor.x * (fadeW / w), pt[1] + 0.018, pt[2] + nor.z * (fadeW / w),
+      );
+      uvs.push(t, 0, t, 1);
     });
-    const indices: number[] = [];
-    for (let index = 0; index < points.length - 1; index += 1) {
-      const start = index * 2;
-      indices.push(start, start + 1, start + 2, start + 1, start + 3, start + 2);
+    const idx: number[] = [];
+    for (let i = 0; i < points.length - 1; i++) {
+      const s = i * 2;
+      idx.push(s, s + 1, s + 2, s + 1, s + 3, s + 2);
     }
-    const result = new THREE.BufferGeometry();
-    result.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
-    result.setIndex(indices);
-    result.computeVertexNormals();
-    return result;
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
+    g.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+    g.setIndex(idx);
+    g.computeVertexNormals();
+    return g;
   }, [points]);
 
   useFrame(({ clock }) => {
-    if (geometry) geometry.attributes.position.needsUpdate = Math.floor(clock.elapsedTime * 2) % 2 === 0;
+    if (matRef.current) matRef.current.uniforms.uTime.value = clock.elapsedTime;
   });
 
   if (!geometry) return null;
   return (
-    <mesh geometry={geometry} rotation={[0, 0, 0]}>
-      <meshBasicMaterial color={TOKENS.accent} transparent opacity={0.18} side={THREE.DoubleSide} />
-    </mesh>
-  );
-}
-
-function AmbientParticles() {
-  const points = useRef<THREE.Points>(null);
-  const particleCount = 360;
-  const { positions, seeds } = useMemo(() => {
-    const particlePositions = new Float32Array(particleCount * 3);
-    const particleSeeds = new Float32Array(particleCount);
-    for (let index = 0; index < particleCount; index += 1) {
-      particlePositions[index * 3] = (Math.random() - 0.5) * 11;
-      particlePositions[index * 3 + 1] = -2.2 + Math.random() * 5;
-      particlePositions[index * 3 + 2] = (Math.random() - 0.5) * 9;
-      particleSeeds[index] = Math.random() * 100;
-    }
-    return { positions: particlePositions, seeds: particleSeeds };
-  }, []);
-
-  useFrame(({ clock }) => {
-    const cloud = points.current;
-    if (!cloud) return;
-    const attribute = cloud.geometry.attributes.position as THREE.BufferAttribute;
-    for (let index = 0; index < particleCount; index += 1) {
-      const stride = index * 3;
-      const seed = seeds[index];
-      attribute.array[stride + 0] += Math.sin(clock.elapsedTime * 0.08 + seed) * 0.0008;
-      attribute.array[stride + 1] += Math.cos(clock.elapsedTime * 0.1 + seed * 0.6) * 0.0005;
-      attribute.array[stride + 2] += Math.sin(clock.elapsedTime * 0.09 + seed * 0.4) * 0.0008;
-      if (attribute.array[stride + 1] > 2.8) attribute.array[stride + 1] = -2.6;
-      if (attribute.array[stride + 1] < -2.8) attribute.array[stride + 1] = 2.6;
-    }
-    attribute.needsUpdate = true;
-  });
-
-  return (
-    <points ref={points}>
-      <bufferGeometry>
-        <bufferAttribute attach="attributes-position" count={positions.length / 3} array={positions} itemSize={3} />
-      </bufferGeometry>
-      <pointsMaterial color={TOKENS.accentStrong} size={0.04} transparent opacity={0.48} sizeAttenuation depthWrite={false} blending={THREE.AdditiveBlending} />
-    </points>
-  );
-}
-
-function CausticLayer() {
-  const material = useRef<THREE.ShaderMaterial>(null);
-
-  useFrame(({ clock }) => {
-    if (material.current) {
-      material.current.uniforms.uTime.value = clock.elapsedTime;
-    }
-  });
-
-  return (
-    <mesh position={[0, 1.3, -1.2]} rotation={[-Math.PI / 2, 0, 0]}>
-      <planeGeometry args={[10, 8, 1, 1]} />
+    <mesh ref={meshRef} geometry={geometry}>
       <shaderMaterial
-        ref={material}
+        ref={matRef}
         transparent
         depthWrite={false}
         blending={THREE.AdditiveBlending}
-        uniforms={{ uTime: { value: 0 }, uTint: { value: new THREE.Color('#48c4d5') } }}
+        side={THREE.DoubleSide}
+        uniforms={{ uTime: { value: 0 }, uColor: { value: new THREE.Color(T.bio400) } }}
         vertexShader={`
           varying vec2 vUv;
           void main() {
@@ -221,14 +305,13 @@ function CausticLayer() {
         `}
         fragmentShader={`
           uniform float uTime;
-          uniform vec3 uTint;
+          uniform vec3 uColor;
           varying vec2 vUv;
           void main() {
-            float waveA = sin((vUv.x * 15.0) + (uTime * 0.75));
-            float waveB = cos((vUv.y * 17.0) - (uTime * 0.65));
-            float ripple = smoothstep(0.78, 1.5, (waveA * waveB + 1.0));
-            float edgeFade = smoothstep(0.0, 0.15, vUv.x) * smoothstep(0.0, 0.15, 1.0 - vUv.x) * smoothstep(0.0, 0.2, vUv.y);
-            gl_FragColor = vec4(uTint, ripple * 0.09 * edgeFade);
+            float flow = fract(vUv.x * 3.0 - uTime * 0.22);
+            float edge = smoothstep(0.0, 0.18, vUv.x) * smoothstep(0.0, 0.18, 1.0 - vUv.x);
+            float alpha = flow * 0.22 * edge;
+            gl_FragColor = vec4(uColor, alpha);
           }
         `}
       />
@@ -236,227 +319,476 @@ function CausticLayer() {
   );
 }
 
-function SceneRig({ parallaxRef, depthProgress }: { parallaxRef?: MutableRefObject<{ x: number; y: number }>; depthProgress: number }) {
-  const rig = useRef<THREE.Group>(null);
-  const { camera, gl } = useThree();
-  const deepColor = useMemo(() => new THREE.Color('#020713'), []);
-  const surfaceColor = useMemo(() => new THREE.Color(TOKENS.canvas), []);
-  const mix = useMemo(() => new THREE.Color(TOKENS.canvas), []);
+/* ─────────────────────────────────────────────────────────────
+   ANOMALY MARKER — pulsing sphere in 3D space
+   bio-400 (normal) or coral-400 (severe ≥ 3)
+   Pulse: opacity + scale over 2s ease-in-out, not color cycling
+───────────────────────────────────────────────────────────── */
+function AnomalyMarker({
+  position,
+  severity = 1,
+  onClick,
+}: {
+  position: [number, number, number];
+  severity?: number;
+  onClick?: () => void;
+}) {
+  const meshRef = useRef<THREE.Mesh>(null);
+  const severe = severity >= 3;
+  const baseColor = severe ? T.coral400 : T.bio400;
 
-  useFrame(() => {
-    const targetX = parallaxRef?.current.x ?? 0;
-    const targetY = parallaxRef?.current.y ?? 0;
-    if (rig.current) {
-      rig.current.rotation.x = THREE.MathUtils.lerp(rig.current.rotation.x, targetY * 0.08, 0.05);
-      rig.current.rotation.y = THREE.MathUtils.lerp(rig.current.rotation.y, targetX * -0.12, 0.05);
-      rig.current.position.x = THREE.MathUtils.lerp(rig.current.position.x, targetX * -0.25, 0.04);
-      rig.current.position.y = THREE.MathUtils.lerp(rig.current.position.y, -depthProgress * 0.4, 0.04);
-    }
-
-    camera.position.y = THREE.MathUtils.lerp(camera.position.y, 0.5 - depthProgress * 0.55 + targetY * 0.08, 0.04);
-    camera.position.z = THREE.MathUtils.lerp(camera.position.z, 6.8 - depthProgress * 0.85, 0.04);
-    camera.lookAt(0, -0.15 - depthProgress * 0.3, 0);
-
-    mix.copy(surfaceColor).lerp(deepColor, depthProgress);
-    gl.setClearColor(mix, 1);
+  useFrame(({ clock }) => {
+    if (!meshRef.current) return;
+    // 2s ease-in-out loop via sine
+    const t = (Math.sin(clock.elapsedTime * Math.PI) + 1) / 2; // 0→1 ease-in-out
+    meshRef.current.scale.setScalar(1 + t * 0.22);
+    (meshRef.current.material as THREE.MeshStandardMaterial).opacity = 0.6 + t * 0.4;
   });
 
-  return <group ref={rig} />;
+  return (
+    <mesh
+      ref={meshRef}
+      position={position}
+      onClick={(e) => { e.stopPropagation(); onClick?.(); }}
+      onPointerOver={() => { document.body.style.cursor = 'pointer'; }}
+      onPointerOut={() => { document.body.style.cursor = ''; }}
+    >
+      <sphereGeometry args={[0.085, 16, 16]} />
+      <meshStandardMaterial
+        color={baseColor}
+        emissive={baseColor}
+        emissiveIntensity={2.4}
+        transparent
+        opacity={0.8}
+        depthWrite={false}
+      />
+    </mesh>
+  );
 }
 
-function TrajectoryLayer({ trajectories, anomalies, cursor, showAnomalies, drawing, onAnomalyClick, onDrawPoint }: { trajectories: FloatTrajectory[]; anomalies: OceanAnomaly[]; cursor: number; showAnomalies: boolean; drawing: boolean; onAnomalyClick?: (anomaly: OceanAnomaly) => void; onDrawPoint: (point: TransectPoint) => void }) {
+/* ─────────────────────────────────────────────────────────────
+   OCEAN FLOOR PLANE — subtle dark disc
+───────────────────────────────────────────────────────────── */
+function OceanFloor() {
+  return (
+    <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -2.2, 0]}>
+      <circleGeometry args={[6, 72]} />
+      <meshStandardMaterial
+        color={T.abyss800}
+        transparent
+        opacity={0.65}
+        roughness={0.95}
+        metalness={0.1}
+      />
+    </mesh>
+  );
+}
+
+/* ─────────────────────────────────────────────────────────────
+   CAUSTIC SURFACE LAYER — animated light ripples
+───────────────────────────────────────────────────────────── */
+function CausticLayer() {
+  const matRef = useRef<THREE.ShaderMaterial>(null);
+  useFrame(({ clock }) => {
+    if (matRef.current) matRef.current.uniforms.uTime.value = clock.elapsedTime;
+  });
+  return (
+    <mesh position={[0, 1.32, -1.0]} rotation={[-Math.PI / 2, 0, 0]}>
+      <planeGeometry args={[11, 9]} />
+      <shaderMaterial
+        ref={matRef}
+        transparent
+        depthWrite={false}
+        blending={THREE.AdditiveBlending}
+        uniforms={{ uTime: { value: 0 }, uColor: { value: new THREE.Color(T.bio400) } }}
+        vertexShader={`
+          varying vec2 vUv;
+          void main() {
+            vUv = uv;
+            gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+          }
+        `}
+        fragmentShader={`
+          uniform float uTime;
+          uniform vec3 uColor;
+          varying vec2 vUv;
+          void main() {
+            float a = sin(vUv.x * 14.0 + uTime * 0.7);
+            float b = cos(vUv.y * 16.0 - uTime * 0.6);
+            float ripple = smoothstep(0.78, 1.4, a * b + 1.0);
+            float fade = smoothstep(0.0,0.14,vUv.x)*smoothstep(0.0,0.14,1.0-vUv.x)*smoothstep(0.0,0.18,vUv.y)*smoothstep(0.0,0.18,1.0-vUv.y);
+            gl_FragColor = vec4(uColor, ripple * 0.07 * fade);
+          }
+        `}
+      />
+    </mesh>
+  );
+}
+
+/* ─────────────────────────────────────────────────────────────
+   IDLE CAMERA DRIFT — ~90s orbit period
+   Pauses on user interaction, resumes after 3s idle
+───────────────────────────────────────────────────────────── */
+function IdleDrift({
+  parallaxRef,
+  interactingRef,
+}: {
+  parallaxRef?: MutableRefObject<{ x: number; y: number }>;
+  interactingRef: MutableRefObject<boolean>;
+}) {
+  const { camera, gl } = useThree();
+  const deepColor = useMemo(() => new THREE.Color('#020511'), []);
+  const surfaceColor = useMemo(() => new THREE.Color(T.abyss950), []);
+  const clearMix = useMemo(() => new THREE.Color(T.abyss950), []);
+
+  const orbitRadius = 6.8;
+  const orbitSpeedRad = (2 * Math.PI) / 90; // ~90s period
+
+  useFrame(({ clock }) => {
+    const px = parallaxRef?.current.x ?? 0;
+    const py = parallaxRef?.current.y ?? 0;
+
+    if (!interactingRef.current) {
+      const t = clock.elapsedTime * orbitSpeedRad;
+      // Subtle drift: ±0.4 on x/z, very slow
+      const driftX = Math.sin(t) * 0.4;
+      const driftZ = Math.cos(t) * 0.4;
+      camera.position.x = THREE.MathUtils.lerp(camera.position.x, driftX + px * -0.2, 0.012);
+      camera.position.z = THREE.MathUtils.lerp(camera.position.z, orbitRadius + driftZ, 0.012);
+    } else {
+      camera.position.x = THREE.MathUtils.lerp(camera.position.x, px * -0.2, 0.04);
+      camera.position.z = THREE.MathUtils.lerp(camera.position.z, orbitRadius, 0.04);
+    }
+    camera.position.y = THREE.MathUtils.lerp(camera.position.y, 0.5 + py * 0.06, 0.04);
+    camera.lookAt(0, -0.12, 0);
+
+    // Clear color stays at abyss-950; depth effect now via timeline, not scroll
+    clearMix.copy(surfaceColor).lerp(deepColor, 0);
+    gl.setClearColor(clearMix, 1);
+  });
+
+  return null;
+}
+
+/* ─────────────────────────────────────────────────────────────
+   TRAJECTORY LAYER — trajectories, housings, buoys, ribbons
+───────────────────────────────────────────────────────────── */
+function TrajectoryLayer({
+  trajectories,
+  anomalies,
+  cursor,
+  showAnomalies,
+  drawing,
+  onAnomalyClick,
+  onDrawPoint,
+}: {
+  trajectories: FloatTrajectory[];
+  anomalies: OceanAnomaly[];
+  cursor: number;
+  showAnomalies: boolean;
+  drawing: boolean;
+  onAnomalyClick?: (a: OceanAnomaly, screenPos: { x: number; y: number }) => void;
+  onDrawPoint: (p: TransectPoint) => void;
+}) {
+  const { camera, size } = useThree();
+
   const { bounds, temperatureRange, timeline } = useMemo(() => {
-    const points = trajectories.flatMap((trajectory) => trajectory.path);
-    const coordinates = [...points, ...anomalies].filter((point) => Number.isFinite(point.lat) && Number.isFinite(point.lon));
-    const lats = coordinates.map((point) => point.lat);
-    const lons = coordinates.map((point) => point.lon);
-    const maxDepth = Math.max(...coordinates.map((point) => point.depth).filter(Number.isFinite), 1);
-    const timestamps = points.map((point) => Date.parse(point.timestamp)).filter(Number.isFinite);
-    const temperatures = points.map((point) => point.temperature).filter((value): value is number => typeof value === 'number' && Number.isFinite(value));
+    const pts = trajectories.flatMap((t) => t.path);
+    const coords = [...pts, ...anomalies].filter(
+      (p) => Number.isFinite(p.lat) && Number.isFinite(p.lon)
+    );
+    const lats = coords.map((p) => p.lat);
+    const lons = coords.map((p) => p.lon);
+    const maxD = Math.max(...coords.map((p) => p.depth).filter(Number.isFinite), 1);
+    const ts = pts.map((p) => Date.parse(p.timestamp)).filter(Number.isFinite);
+    const temps = pts
+      .map((p) => p.temperature)
+      .filter((v): v is number => typeof v === 'number' && Number.isFinite(v));
     return {
-      bounds: { minLat: lats.length ? Math.min(...lats) : -1, maxLat: lats.length ? Math.max(...lats) : 1, minLon: lons.length ? Math.min(...lons) : -1, maxLon: lons.length ? Math.max(...lons) : 1, maxDepth } satisfies Bounds,
-      temperatureRange: [temperatures.length ? Math.min(...temperatures) : 0, temperatures.length ? Math.max(...temperatures) : 1] as [number, number],
-      timeline: [timestamps.length ? Math.min(...timestamps) : 0, timestamps.length ? Math.max(...timestamps) : 1] as [number, number],
+      bounds: {
+        minLat: lats.length ? Math.min(...lats) : -1,
+        maxLat: lats.length ? Math.max(...lats) : 1,
+        minLon: lons.length ? Math.min(...lons) : -1,
+        maxLon: lons.length ? Math.max(...lons) : 1,
+        maxDepth: maxD,
+      } satisfies Bounds,
+      temperatureRange: [
+        temps.length ? Math.min(...temps) : 0,
+        temps.length ? Math.max(...temps) : 1,
+      ] as [number, number],
+      timeline: [
+        ts.length ? Math.min(...ts) : 0,
+        ts.length ? Math.max(...ts) : 1,
+      ] as [number, number],
     };
   }, [trajectories, anomalies]);
 
-  const mapPoint = (point: Pick<TrajectoryPoint, 'lat' | 'lon' | 'depth'>): [number, number, number] => {
-    const x = ((point.lon - bounds.minLon) / Math.max(bounds.maxLon - bounds.minLon, 0.001) - 0.5) * 6.4;
-    const z = ((point.lat - bounds.minLat) / Math.max(bounds.maxLat - bounds.minLat, 0.001) - 0.5) * 4.2;
-    const y = 1.65 - clamp(point.depth / Math.max(bounds.maxDepth, 1), 0, 1) * 3.4;
+  const mapPoint = (p: Pick<TrajectoryPoint, 'lat' | 'lon' | 'depth'>): [number, number, number] => {
+    const x = ((p.lon - bounds.minLon) / Math.max(bounds.maxLon - bounds.minLon, 0.001) - 0.5) * 6.0;
+    const z = ((p.lat - bounds.minLat) / Math.max(bounds.maxLat - bounds.minLat, 0.001) - 0.5) * 4.0;
+    const y = 1.6 - clamp(p.depth / Math.max(bounds.maxDepth, 1), 0, 1) * 3.2;
     return [x, y, z];
   };
 
   const currentTimestamp = timeline[0] + (timeline[1] - timeline[0]) * cursor;
-  const surfaceY = 1.65;
-  const drawPlaneSize = 12;
+  const surfaceY = 1.6;
 
-  const drawPoint = (point: THREE.Vector3) => ({
-    lat: bounds.minLat + ((point.z / 4.2 + 0.5) * Math.max(bounds.maxLat - bounds.minLat, 0.001)),
-    lon: bounds.minLon + ((point.x / 6.4 + 0.5) * Math.max(bounds.maxLon - bounds.minLon, 0.001)),
-  });
+  // Project 3D world pos → screen position for anomaly callout anchor
+  const projectToScreen = (pos: [number, number, number]): { x: number; y: number } => {
+    const v = new THREE.Vector3(...pos).project(camera);
+    return {
+      x: ((v.x + 1) / 2) * size.width,
+      y: ((-v.y + 1) / 2) * size.height,
+    };
+  };
 
   return (
     <group>
+      {/* Draw-transect invisible plane at surface */}
       <mesh
         position={[0, surfaceY, 0]}
         rotation={[-Math.PI / 2, 0, 0]}
-        onPointerDown={(event) => {
+        onPointerDown={(e) => {
           if (!drawing) return;
-          event.stopPropagation();
-          onDrawPoint(drawPoint(event.point));
+          e.stopPropagation();
+          const b = bounds;
+          const pt = e.point;
+          onDrawPoint({
+            lat: b.minLat + ((pt.z / 4.0 + 0.5) * Math.max(b.maxLat - b.minLat, 0.001)),
+            lon: b.minLon + ((pt.x / 6.0 + 0.5) * Math.max(b.maxLon - b.minLon, 0.001)),
+          });
         }}
       >
-        <planeGeometry args={[drawPlaneSize, drawPlaneSize]} />
-        <meshBasicMaterial color={TOKENS.accent} transparent opacity={0} />
+        <planeGeometry args={[14, 10]} />
+        <meshBasicMaterial color={T.bio400} transparent opacity={0} />
       </mesh>
-      {trajectories.map((trajectory) => {
-        const visible = trajectory.path.filter((point) => Date.parse(point.timestamp) <= currentTimestamp).map((point) => ({ point, position: mapPoint(point) }));
-        const fallback = trajectory.path[0] ? [{ point: trajectory.path[0], position: mapPoint(trajectory.path[0]) }] : [];
+
+      {/* Trajectories */}
+      {trajectories.map((traj) => {
+        const visible = traj.path
+          .filter((p) => Date.parse(p.timestamp) <= currentTimestamp)
+          .map((p) => ({ p, pos: mapPoint(p) }));
+        const fallback = traj.path[0]
+          ? [{ p: traj.path[0], pos: mapPoint(traj.path[0]) }]
+          : [];
         const items = visible.length ? visible : cursor === 0 ? fallback : [];
         const latest = items[items.length - 1];
-        const previous = items[Math.max(0, items.length - 2)];
-        const color = latest ? temperatureColor(latest.point.temperature, temperatureRange) : new THREE.Color(TOKENS.accent);
-        const rotation: [number, number, number] = previous && latest ? [0, Math.atan2(latest.position[0] - previous.position[0], latest.position[2] - previous.position[2]), 0] : [0, 0, 0];
-        const ribbonPoints = items.map((item) => item.position);
+        const prev = items[Math.max(0, items.length - 2)];
+        const color = latest
+          ? temperatureColor(latest.p.temperature, temperatureRange)
+          : new THREE.Color(T.bio400);
+        const rot: [number, number, number] =
+          prev && latest
+            ? [0, Math.atan2(latest.pos[0] - prev.pos[0], latest.pos[2] - prev.pos[2]), 0]
+            : [0, 0, 0];
+
         return (
-          <group key={trajectory.float_id}>
-            {items.slice(1).map((item, index) => (
-              <Line key={`${trajectory.float_id}-segment-${index}`} points={[items[index].position, item.position]} color={temperatureColor(item.point.temperature, temperatureRange)} transparent opacity={0.86} lineWidth={1.6} />
+          <group key={traj.float_id}>
+            {/* Trajectory lines, colored by temperature */}
+            {items.slice(1).map((item, i) => (
+              <Line
+                key={`${traj.float_id}-seg-${i}`}
+                points={[items[i].pos, item.pos]}
+                color={temperatureColor(item.p.temperature, temperatureRange)}
+                transparent
+                opacity={0.7}
+                lineWidth={1.4}
+              />
             ))}
             {latest && (
               <>
-                <FloatHousing position={latest.position} rotation={rotation} color={color} />
-                <SurfaceBuoy position={[latest.position[0], surfaceY, latest.position[2]]} tetherTo={latest.position} color={color} />
-                <CurrentRibbon points={ribbonPoints} />
+                <FloatHousing position={latest.pos} rotation={rot} color={color} />
+                <SurfaceBuoy
+                  position={[latest.pos[0], surfaceY, latest.pos[2]]}
+                  tetherTo={latest.pos}
+                  color={color}
+                />
+                <CurrentRibbon points={items.map((it) => it.pos)} />
               </>
             )}
           </group>
         );
       })}
+
+      {/* Anomaly markers */}
       {showAnomalies &&
-        anomalies.map((anomaly, index) => {
-          const severe = (anomaly.severity ?? 1) >= 3;
+        anomalies.map((a, idx) => {
+          const pos = mapPoint(a);
           return (
-            <mesh
-              key={`${anomaly.float_id ?? 'anomaly'}-${anomaly.time ?? index}`}
-              position={mapPoint(anomaly)}
-              scale={1 + clamp(anomaly.severity ?? 1, 0, 5) * 0.08}
-              onClick={(event) => {
-                event.stopPropagation();
-                onAnomalyClick?.(anomaly);
-              }}
-            >
-              <octahedronGeometry args={[0.12, 1]} />
-              <meshStandardMaterial color={severe ? TOKENS.danger : TOKENS.warning} emissive={severe ? TOKENS.danger : TOKENS.warning} emissiveIntensity={2.2} />
-            </mesh>
+            <AnomalyMarker
+              key={`${a.float_id ?? 'a'}-${a.time ?? idx}`}
+              position={pos}
+              severity={a.severity}
+              onClick={() => onAnomalyClick?.(a, projectToScreen(pos))}
+            />
           );
         })}
     </group>
   );
 }
 
-function TimelineControls({ cursor, playing, showAnomalies, drawing, onCursorChange, onPlayingChange, onAnomalyToggle, onDrawToggle, hasData }: { cursor: number; playing: boolean; showAnomalies: boolean; drawing: boolean; onCursorChange: (value: number) => void; onPlayingChange: (value: boolean) => void; onAnomalyToggle: () => void; onDrawToggle: () => void; hasData: boolean }) {
+/* ─────────────────────────────────────────────────────────────
+   SCENE INNER — inside Canvas context
+───────────────────────────────────────────────────────────── */
+function SceneInner({
+  trajectories,
+  anomalies,
+  cursor,
+  playing,
+  showAnomalies,
+  drawing,
+  parallaxRef,
+  onAnomalyClick,
+  onDrawPoint,
+  interactingRef,
+}: {
+  trajectories: FloatTrajectory[];
+  anomalies: OceanAnomaly[];
+  cursor: number;
+  playing: boolean;
+  showAnomalies: boolean;
+  drawing: boolean;
+  parallaxRef?: MutableRefObject<{ x: number; y: number }>;
+  onAnomalyClick?: (a: OceanAnomaly, screenPos: { x: number; y: number }) => void;
+  onDrawPoint: (p: TransectPoint) => void;
+  interactingRef: MutableRefObject<boolean>;
+}) {
   return (
-    <div className="pointer-events-auto absolute bottom-5 left-5 w-[min(380px,calc(100%-2.5rem))] rounded-lg border border-[var(--fc-line)] bg-[var(--fc-surface-1)]/90 p-3 text-[var(--fc-ink)] shadow-lg backdrop-blur-md transition duration-500">
-      <div className="mb-2 flex items-center justify-between gap-3">
-        <span className="font-mono text-[10px] uppercase tracking-[0.16em] text-[var(--fc-ink-muted)]">Trajectory timeline</span>
-        <div className="flex gap-2">
-          <button type="button" onClick={onAnomalyToggle} className="rounded border border-[var(--fc-line)] px-2 py-1 text-[11px] text-[var(--fc-ink-muted)] hover:border-[var(--fc-line-strong)] hover:text-[var(--fc-ink)]">
-            {showAnomalies ? 'Hide anomalies' : 'Show anomalies'}
-          </button>
-          <button type="button" onClick={onDrawToggle} className={`rounded border px-2 py-1 text-[11px] ${drawing ? 'border-[var(--fc-accent)] bg-[var(--fc-accent)]/10 text-[var(--fc-accent-strong)]' : 'border-[var(--fc-line)] text-[var(--fc-ink-muted)]'}`}>
-            {drawing ? 'Finish transect' : 'Draw transect'}
-          </button>
-          {hasData && (
-            <button
-              type="button"
-              onClick={() => {
-                if (!playing && cursor >= 1) onCursorChange(0);
-                onPlayingChange(!playing);
-              }}
-              className="rounded border border-[var(--fc-accent)]/60 px-2 py-1 text-[11px] text-[var(--fc-accent-strong)]"
-            >
-              {playing ? 'Pause' : 'Play'}
-            </button>
-          )}
-        </div>
-      </div>
-      <input aria-label="Trajectory timeline" type="range" min="0" max="1" step="0.001" value={cursor} disabled={!hasData} onChange={(event) => onCursorChange(Number(event.target.value))} className="w-full accent-[var(--fc-accent)] disabled:opacity-40" />
-      <div className="mt-1 flex justify-between font-mono text-[10px] text-[var(--fc-ink-muted)]">
-        <span>earliest</span>
-        <span>{hasData ? `${Math.round(cursor * 100)}%` : 'waiting for telemetry'}</span>
-        <span>latest</span>
-      </div>
-    </div>
+    <>
+      <PerspectiveCamera makeDefault position={[0, 0.5, 6.8]} fov={40} near={0.1} far={100} />
+
+      {/* Lights */}
+      <ambientLight intensity={0.55} color={T.foam100} />
+      <directionalLight position={[2, 5, 3]} intensity={0.9} color={T.bio300} />
+      <pointLight position={[-2, 2, 1]} intensity={0.6} color={T.bio400} />
+      <pointLight position={[3, -1, -2]} intensity={0.25} color={T.abyss800} />
+
+      {/* Idle camera drift */}
+      <IdleDrift parallaxRef={parallaxRef} interactingRef={interactingRef} />
+
+      {/* Scene elements */}
+      <OceanFloor />
+      <CausticLayer />
+      <TrajectoryLayer
+        trajectories={trajectories}
+        anomalies={anomalies}
+        cursor={cursor}
+        showAnomalies={showAnomalies}
+        drawing={drawing}
+        onAnomalyClick={onAnomalyClick}
+        onDrawPoint={onDrawPoint}
+      />
+
+      {/* Post-processing — Bloom for bioluminescent glow */}
+      <EffectComposer>
+        <Bloom
+          luminanceThreshold={0.55}
+          luminanceSmoothing={0.4}
+          intensity={1.4}
+          mipmapBlur
+        />
+      </EffectComposer>
+    </>
   );
 }
 
-export default function OceanScene({ trajectories = [], anomalies = [], onAnomalyClick, onTransectDraw, parallaxRef, depthProgress = 0 }: OceanSceneProps) {
-  const [cursor, setCursor] = useState(1);
-  const [playing, setPlaying] = useState(false);
-  const [showAnomalies, setShowAnomalies] = useState(true);
-  const [drawing, setDrawing] = useState(false);
+/* ─────────────────────────────────────────────────────────────
+   OCEAN SCENE — exported default
+   Timeline controls are now PAGE-LEVEL (TimelineScrubber.tsx).
+   This component only owns the canvas.
+───────────────────────────────────────────────────────────── */
+export default function OceanScene({
+  trajectories = [],
+  anomalies = [],
+  onAnomalyClick,
+  onTransectDraw,
+  parallaxRef,
+  cursorProp = 1,
+  playing = false,
+  onCursorChange,
+  onPlayingChange,
+  drawing = false,
+}: OceanSceneProps) {
+  const [showAnomalies] = useState(true);
   const [drawPoints, setDrawPoints] = useState<TransectPoint[]>([]);
+  const interactingRef = useRef(false);
+  const idleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  const markInteracting = () => {
+    interactingRef.current = true;
+    if (idleTimer.current) clearTimeout(idleTimer.current);
+    idleTimer.current = setTimeout(() => { interactingRef.current = false; }, 3000);
+  };
+
+  // Timeline playback — controlled externally via cursorProp/playing
   useEffect(() => {
     if (!playing || trajectories.length === 0) return;
-    const interval = window.setInterval(() =>
-      setCursor((current) => {
-        const next = current + 0.008;
-        if (next >= 1) {
-          setPlaying(false);
-          return 1;
-        }
-        return next;
-      }),
-    60);
+    const interval = window.setInterval(() => {
+      const next = cursorProp + 0.008;
+      if (next >= 1) {
+        onPlayingChange?.(false);
+        onCursorChange?.(1);
+      } else {
+        onCursorChange?.(next);
+      }
+    }, 60);
     return () => window.clearInterval(interval);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [playing, trajectories.length]);
 
+  // Forward drawn transect
   useEffect(() => {
-    if (trajectories.length === 0) {
-      setPlaying(false);
-      setCursor(1);
+    if (!drawing && drawPoints.length >= 2) {
+      onTransectDraw?.(drawPoints);
     }
-  }, [trajectories.length]);
+    if (!drawing) setDrawPoints([]);
+  }, [drawing]); // eslint-disable-line
 
-  const hasData = trajectories.some((trajectory) => trajectory.path.length > 0);
+  const hasData = trajectories.some((t) => t.path.length > 0);
 
   return (
     <div className="absolute inset-0">
-      <Canvas dpr={[1, 1.8]}>
-        <PerspectiveCamera makeDefault position={[0, 0.5, 6.8]} fov={42} />
-        <ambientLight intensity={0.75} />
-        <directionalLight position={[2, 5, 4]} intensity={1.1} color={TOKENS.accentStrong} />
-        <pointLight position={[-1.6, 2.3, 1]} intensity={0.7} color={TOKENS.accent} />
-        <SceneRig parallaxRef={parallaxRef} depthProgress={depthProgress} />
-        <group>
-          <AmbientParticles />
-          <CausticLayer />
-          <TrajectoryLayer trajectories={trajectories} anomalies={anomalies} cursor={cursor} showAnomalies={showAnomalies} drawing={drawing} onAnomalyClick={onAnomalyClick} onDrawPoint={(point) => setDrawPoints((current) => [...current, point])} />
-          <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -2.2, 0]}>
-            <circleGeometry args={[5.5, 64]} />
-            <meshStandardMaterial color={TOKENS.surfaceInset} transparent opacity={0.75} />
-          </mesh>
-        </group>
+      <Canvas
+        dpr={[1, 1.8]}
+        gl={{ antialias: true, alpha: false, powerPreference: 'high-performance' }}
+        style={{ background: T.abyss950 }}
+        onPointerMove={markInteracting}
+        onWheel={markInteracting}
+      >
+        <SceneInner
+          trajectories={trajectories}
+          anomalies={anomalies}
+          cursor={cursorProp}
+          playing={playing}
+          showAnomalies={showAnomalies}
+          drawing={drawing}
+          parallaxRef={parallaxRef}
+          onAnomalyClick={onAnomalyClick}
+          onDrawPoint={(pt) => setDrawPoints((prev) => [...prev, pt])}
+          interactingRef={interactingRef}
+        />
       </Canvas>
-      {!hasData && <div className="pointer-events-none absolute left-1/2 top-[42%] -translate-x-1/2 rounded-md border border-[var(--fc-line)] bg-[var(--fc-surface-inset)]/90 px-3 py-2 text-center font-mono text-[10px] uppercase tracking-[0.12em] text-[var(--fc-ink-subtle)]">No trajectory data</div>}
-      <TimelineControls
-        cursor={cursor}
-        playing={playing}
-        showAnomalies={showAnomalies}
-        drawing={drawing}
-        onCursorChange={setCursor}
-        onPlayingChange={setPlaying}
-        onAnomalyToggle={() => setShowAnomalies((value) => !value)}
-        onDrawToggle={() => {
-          if (drawing && drawPoints.length >= 2) onTransectDraw?.(drawPoints);
-          setDrawing((value) => !value);
-          if (drawing) setDrawPoints([]);
-        }}
-        hasData={hasData}
-      />
+
+      {/* Empty state overlay */}
+      {!hasData && (
+        <div
+          className="pointer-events-none absolute left-1/2 top-[44%] -translate-x-1/2"
+          style={{
+            background: 'rgba(10,18,32,0.75)',
+            backdropFilter: 'blur(12px)',
+            border: '1px solid rgba(19,30,48,0.9)',
+            borderRadius: 8,
+            padding: '8px 16px',
+            fontFamily: 'var(--font-mono)',
+            fontSize: 10,
+            letterSpacing: '0.10em',
+            textTransform: 'uppercase',
+            color: 'var(--foam-400)',
+          }}
+        >
+          No trajectory data · waiting for telemetry
+        </div>
+      )}
     </div>
   );
 }
