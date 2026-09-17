@@ -66,6 +66,39 @@
   --parallax-y: 0;
 }
 
+/* DOM overlays sit at different depths from the scene. The root values are
+   eased by page.tsx, so each layer responds without introducing a second
+   pointer listener or changing panel responsibilities. */
+.parallax-layer {
+  --parallax-depth: 0px;
+  transform: translate3d(
+    calc(var(--parallax-x) * var(--parallax-depth)),
+    calc(var(--parallax-y) * var(--parallax-depth)),
+    0
+  );
+  transition: transform 180ms cubic-bezier(0.22, 1, 0.36, 1);
+  will-change: transform;
+}
+
+.parallax-layer--near {
+  --parallax-depth: 4px;
+}
+
+.parallax-layer--mid {
+  --parallax-depth: 10px;
+}
+
+.parallax-layer--far {
+  --parallax-depth: 16px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .parallax-layer {
+    transform: none;
+    transition: none;
+  }
+}
+
 /* ── Reset ────────────────────────────────────────────────── */
 *, *::before, *::after {
   box-sizing: border-box;

@@ -13,6 +13,7 @@
      z-35 Transect scrim
      z-40 TransectSheet (bottom sheet)
      z-50 SectionNav (vertical desktop / bottom mobile)
+     z-50 SettingsPanel (bottom-right corner)
 ───────────────────────────────────────────────────────────── */
 
 import dynamic from 'next/dynamic';
@@ -28,8 +29,10 @@ import SectionNav from '@/components/SectionNav';
 import SectionLayer from '@/components/SectionLayer';
 import AnomalySectionPanel from '@/components/AnomalySectionPanel';
 import TransectSectionHint from '@/components/TransectSectionHint';
+import SettingsPanel from '@/components/SettingsPanel';
 import { EyebrowReveal } from '@/components/SplitReveal';
 import { sectionIndex, type DashboardSectionId } from '@/lib/sections';
+import { loadSettings, saveSettings, type QualityLevel } from '@/lib/settings';
 import type { FloatTrajectory, OceanAnomaly, TransectPoint } from '@/components/OceanScene';
 
 /* Dynamically imported — R3F must be client-only, no SSR */
@@ -97,6 +100,29 @@ export default function Page() {
     setActiveSection(id);
   };
 
+  /* ── Settings state (Task 5) ─────────────────────────────── */
+  const [quality, setQuality] = useState<QualityLevel>('high');
+  const [soundEnabled, setSoundEnabled] = useState(false);
+
+  // Load persisted quality on client mount (never persist sound=true)
+  useEffect(() => {
+    const saved = loadSettings();
+    setQuality(saved.quality);
+    // soundEnabled always starts false — explicit user opt-in each session
+  }, []);
+
+  const handleQualityChange = (q: QualityLevel) => {
+    setQuality(q);
+    saveSettings({ quality: q, soundEnabled: false });
+  };
+
+  const handleSoundChange = (enabled: boolean) => {
+    setSoundEnabled(enabled);
+    // Save quality only, never sound=true
+    saveSettings({ quality, soundEnabled: false });
+  };
+
+
   /* ── Timeline state ─────────────────────────────────────── */
   const [cursor, setCursor] = useState(1);
   const [playing, setPlaying] = useState(false);
@@ -134,6 +160,8 @@ export default function Page() {
     const loop = () => {
       parallaxRef.current.x += (parallaxTarget.current.x - parallaxRef.current.x) * 0.08;
       parallaxRef.current.y += (parallaxTarget.current.y - parallaxRef.current.y) * 0.08;
+      document.documentElement.style.setProperty('--parallax-x', String(parallaxRef.current.x));
+      document.documentElement.style.setProperty('--parallax-y', String(parallaxRef.current.y));
       frame = requestAnimationFrame(loop);
     };
     frame = requestAnimationFrame(loop);
@@ -270,6 +298,7 @@ export default function Page() {
           onPlayingChange={setPlaying}
           drawing={drawing}
           onBootProgress={setSceneBootProgress}
+          qualityLevel={quality}
         />
       </div>
 
@@ -344,7 +373,7 @@ export default function Page() {
             zIndex: 15,
             padding: '16px',
           }}
-          className="glass-panel"
+          className="glass-panel parallax-layer parallax-layer--mid"
         >
           <EyebrowReveal text="Float traces" className="eyebrow" style={{ marginBottom: 6 }} staggerMs={22} />
           <p
@@ -417,6 +446,13 @@ export default function Page() {
           onClose={() => setTransectOpen(false)}
         />
       )}
+      {/* ── z-50: Settings panel (bottom-right) ────────────── */}
+      <SettingsPanel
+        quality={quality}
+        soundEnabled={soundEnabled}
+        onQualityChange={handleQualityChange}
+        onSoundChange={handleSoundChange}
+      />
     </main>
     </EntryGate>
   );

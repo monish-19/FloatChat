@@ -5,6 +5,8 @@ import { Line, PerspectiveCamera, useProgress } from '@react-three/drei';
 import { EffectComposer, Bloom } from '@react-three/postprocessing';
 import { MutableRefObject, useEffect, useMemo, useRef, useState } from 'react';
 import * as THREE from 'three';
+import type { QualityLevel } from '@/lib/settings';
+import { QUALITY_BLOOM, QUALITY_PARTICLE_COUNT } from '@/lib/settings';
 
 /* ── Public types ─────────────────────────────────────────── */
 export type TrajectoryPoint = {
@@ -48,6 +50,8 @@ type OceanSceneProps = {
   drawing?: boolean;
   /** Normalized 0–1 scene boot progress (chunk load is tracked separately in EntryGate). */
   onBootProgress?: (progress: number) => void;
+  /** Quality level drives: DPR, particle count, bloom intensity, caustic layer. */
+  qualityLevel?: QualityLevel;
 };
 
 type Bounds = {
@@ -377,6 +381,67 @@ function AnomalyMarker({
 }
 
 /* ─────────────────────────────────────────────────────────────
+   BIOPLANKTON FIELD — quality-driven floating particle cloud
+   Additive-blended points, animated with sinusoidal drift.
+   count = 0 on Low quality (component returns null immediately).
+───────────────────────────────────────────────────────────── */
+function BioplanktonField({ count }: { count: number }) {
+  const meshRef = useRef<THREE.Points>(null);
+
+  const { positions, seeds } = useMemo(() => {
+    if (count === 0) return { positions: new Float32Array(0), seeds: new Float32Array(0) };
+    const pos = new Float32Array(count * 3);
+    const s   = new Float32Array(count);
+    for (let i = 0; i < count; i++) {
+      pos[i * 3]     = (Math.random() - 0.5) * 8.0;
+      pos[i * 3 + 1] = (Math.random() - 0.5) * 3.5;
+      pos[i * 3 + 2] = (Math.random() - 0.5) * 6.0;
+      s[i] = Math.random() * Math.PI * 2;
+    }
+    return { positions: pos, seeds: s };
+  }, [count]);
+
+  useFrame(({ clock }) => {
+    if (!meshRef.current || count === 0) return;
+    const pos = meshRef.current.geometry.attributes.position as THREE.BufferAttribute;
+    const t = clock.elapsedTime;
+    for (let i = 0; i < count; i++) {
+      const seed = seeds[i];
+      pos.array[i * 3]     = (pos.array[i * 3]     + Math.sin(t * 0.18 + seed * 1.7) * 0.0004) as number;
+      pos.array[i * 3 + 1] = (pos.array[i * 3 + 1] + Math.sin(t * 0.12 + seed * 2.3) * 0.0006) as number;
+      pos.array[i * 3 + 2] = (pos.array[i * 3 + 2] + Math.cos(t * 0.15 + seed * 1.1) * 0.0003) as number;
+      if (pos.array[i * 3 + 1] >  1.65) pos.array[i * 3 + 1] = -1.75;
+      if (pos.array[i * 3 + 1] < -2.2)  pos.array[i * 3 + 1] =  1.62;
+    }
+    pos.needsUpdate = true;
+  });
+
+  if (count === 0) return null;
+
+  return (
+    <points ref={meshRef} key={count}>
+      <bufferGeometry>
+        <bufferAttribute
+          attach="attributes-position"
+          array={positions}
+          count={count}
+          itemSize={3}
+        />
+      </bufferGeometry>
+      <pointsMaterial
+        color={T.bio400}
+        size={0.028}
+        transparent
+        opacity={0.5}
+        depthWrite={false}
+        blending={THREE.AdditiveBlending}
+        sizeAttenuation
+      />
+    </points>
+  );
+}
+
+/* ─────────────────────────────────────────────────────────────
    OCEAN FLOOR PLANE — subtle dark disc
 ───────────────────────────────────────────────────────────── */
 function OceanFloor() {
@@ -689,6 +754,7 @@ function SceneInner({
   onDrawPoint,
   interactingRef,
   onBootProgress,
+  qualityLevel = 'high',
 }: {
   trajectories: FloatTrajectory[];
   anomalies: OceanAnomaly[];
@@ -701,7 +767,10 @@ function SceneInner({
   onDrawPoint: (p: TransectPoint) => void;
   interactingRef: MutableRefObject<boolean>;
   onBootProgress?: (progress: number) => void;
+  qualityLevel?: QualityLevel;
 }) {
+  const bloomIntensity = QUALITY_BLOOM[qualityLevel];
+  const particleCount  = QUALITY_PARTICLE_COUNT[qualityLevel];
   return (
     <>
       <SceneBootReporter onBootProgress={onBootProgress} />
@@ -718,7 +787,8 @@ function SceneInner({
 
       {/* Scene elements */}
       <OceanFloor />
-      <CausticLayer />
+      {qualityLevel !== 'low' && <CausticLayer />}
+      <BioplanktonField count={particleCount} />
       <TrajectoryLayer
         trajectories={trajectories}
         anomalies={anomalies}
@@ -729,15 +799,18 @@ function SceneInner({
         onDrawPoint={onDrawPoint}
       />
 
-      {/* Post-processing — Bloom for bioluminescent glow */}
-      <EffectComposer>
-        <Bloom
-          luminanceThreshold={0.55}
-          luminanceSmoothing={0.4}
-          intensity={1.4}
-          mipmapBlur
-        />
-      </EffectComposer>
+      {/* Post-processing — Bloom for bioluminescent glow.
+          Omitted entirely on Low quality (bloomIntensity = 0). */}
+      {bloomIntensity > 0 && (
+        <EffectComposer>
+          <Bloom
+            luminanceThreshold={qualityLevel === 'medium' ? 0.6 : 0.55}
+            luminanceSmoothing={0.4}
+            intensity={bloomIntensity}
+            mipmapBlur={qualityLevel === 'high'}
+          />
+        </EffectComposer>
+      )}
     </>
   );
 }
@@ -759,6 +832,7 @@ export default function OceanScene({
   onPlayingChange,
   drawing = false,
   onBootProgress,
+  qualityLevel = 'high',
 }: OceanSceneProps) {
   const [showAnomalies] = useState(true);
   const [drawPoints, setDrawPoints] = useState<TransectPoint[]>([]);
@@ -800,8 +874,8 @@ export default function OceanScene({
   return (
     <div className="absolute inset-0">
       <Canvas
-        dpr={[1, 1.8]}
-        gl={{ antialias: true, alpha: false, powerPreference: 'high-performance' }}
+        dpr={qualityLevel === 'high' ? [1, 1.8] : qualityLevel === 'medium' ? [1, 1.2] : [1, 1.0]}
+        gl={{ antialias: qualityLevel !== 'low', alpha: false, powerPreference: 'high-performance' }}
         style={{ background: T.abyss950 }}
         onPointerMove={markInteracting}
         onWheel={markInteracting}
@@ -818,6 +892,7 @@ export default function OceanScene({
           onDrawPoint={(pt) => setDrawPoints((prev) => [...prev, pt])}
           interactingRef={interactingRef}
           onBootProgress={onBootProgress}
+          qualityLevel={qualityLevel}
         />
       </Canvas>
 

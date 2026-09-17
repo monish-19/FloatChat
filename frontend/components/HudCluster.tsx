@@ -6,7 +6,8 @@
    No cards-in-cards. One glass strip, three data points.
 ───────────────────────────────────────────────────────────── */
 
-import { useEffect, useRef, useState } from 'react';
+import { animate, motion, useMotionValue } from 'framer-motion';
+import { useEffect, useState } from 'react';
 
 type HudProps = {
   profileCount: number | null;
@@ -16,29 +17,26 @@ type HudProps = {
 };
 
 function AnimatedNum({ target }: { target: number | null }) {
-  const [display, setDisplay] = useState<number | null>(null);
-  const frameRef = useRef(0);
+  const [display, setDisplay] = useState<number | null>(target === null ? null : 0);
+  const value = useMotionValue(target ?? 0);
 
   useEffect(() => {
-    if (target === null) { setDisplay(null); return; }
-    if (display === null) { setDisplay(target); return; }
-    const start = display;
-    const duration = 600;
-    const startTime = performance.now();
-    const tick = (now: number) => {
-      const p = Math.min((now - startTime) / duration, 1);
-      // ease-out cubic
-      const ease = 1 - Math.pow(1 - p, 3);
-      setDisplay(Math.round(start + (target - start) * ease));
-      if (p < 1) frameRef.current = requestAnimationFrame(tick);
-    };
-    frameRef.current = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(frameRef.current);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [target]);
+    if (target === null) {
+      setDisplay(null);
+      return;
+    }
+
+    const controls = animate(value, target, {
+      duration: 0.65,
+      ease: [0.22, 1, 0.36, 1],
+      onUpdate: (latest) => setDisplay(Math.round(latest)),
+    });
+
+    return () => controls.stop();
+  }, [target, value]);
 
   if (display === null) return <span style={{ opacity: 0.3 }}>—</span>;
-  return <>{display.toLocaleString()}</>;
+  return <motion.span aria-live="polite">{display.toLocaleString()}</motion.span>;
 }
 
 export default function HudCluster({ profileCount, anomalyCount, latencyMs, isLive }: HudProps) {
@@ -46,7 +44,7 @@ export default function HudCluster({ profileCount, anomalyCount, latencyMs, isLi
 
   return (
     <div
-      className="panel-mount"
+      className="panel-mount parallax-layer parallax-layer--far"
       style={{
         position: 'fixed',
         top: 16,

@@ -106,7 +106,7 @@ export default function ChatPanel({ questionSeed, collapsed = false, onCollapsed
   return (
     <div
       id="chat-panel"
-      className="chat-panel-enter"
+      className="chat-panel-enter parallax-layer parallax-layer--near"
       style={{
         position: 'fixed',
         left: 0,
