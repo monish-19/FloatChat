@@ -1,7 +1,7 @@
 'use client';
 
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
-import { Line, PerspectiveCamera, OrbitControls } from '@react-three/drei';
+import { Line, PerspectiveCamera, useProgress } from '@react-three/drei';
 import { EffectComposer, Bloom } from '@react-three/postprocessing';
 import { MutableRefObject, useEffect, useMemo, useRef, useState } from 'react';
 import * as THREE from 'three';
@@ -46,6 +46,8 @@ type OceanSceneProps = {
   onCursorChange?: (v: number) => void;
   onPlayingChange?: (v: boolean) => void;
   drawing?: boolean;
+  /** Normalized 0–1 scene boot progress (chunk load is tracked separately in EntryGate). */
+  onBootProgress?: (progress: number) => void;
 };
 
 type Bounds = {
@@ -350,8 +352,16 @@ function AnomalyMarker({
       ref={meshRef}
       position={position}
       onClick={(e) => { e.stopPropagation(); onClick?.(); }}
-      onPointerOver={() => { document.body.style.cursor = 'pointer'; }}
-      onPointerOut={() => { document.body.style.cursor = ''; }}
+      onPointerOver={() => {
+        if (!document.body.classList.contains('custom-cursor-active')) {
+          document.body.style.cursor = 'pointer';
+        }
+      }}
+      onPointerOut={() => {
+        if (!document.body.classList.contains('custom-cursor-active')) {
+          document.body.style.cursor = '';
+        }
+      }}
     >
       <sphereGeometry args={[0.085, 16, 16]} />
       <meshStandardMaterial
@@ -628,6 +638,43 @@ function TrajectoryLayer({
 }
 
 /* ─────────────────────────────────────────────────────────────
+   BOOT PROGRESS — drei LoadingManager + first rendered frame
+   (shader compile happens on first draw)
+───────────────────────────────────────────────────────────── */
+function SceneBootReporter({ onBootProgress }: { onBootProgress?: (p: number) => void }) {
+  const { progress, active } = useProgress();
+  const firstFrame = useRef(false);
+  const lastSent = useRef(0);
+
+  const emit = (value: number) => {
+    const next = Math.min(1, Math.max(0, value));
+    if (next <= lastSent.current + 0.001 && next < 1) return;
+    lastSent.current = next;
+    onBootProgress?.(next);
+  };
+
+  useEffect(() => {
+    emit(0.04);
+  }, []);
+
+  useEffect(() => {
+    if (active) {
+      emit(0.12 + (progress / 100) * 0.68);
+    } else if (progress >= 100) {
+      emit(Math.max(lastSent.current, 0.82));
+    }
+  }, [progress, active]);
+
+  useFrame(() => {
+    if (firstFrame.current) return;
+    firstFrame.current = true;
+    emit(1);
+  });
+
+  return null;
+}
+
+/* ─────────────────────────────────────────────────────────────
    SCENE INNER — inside Canvas context
 ───────────────────────────────────────────────────────────── */
 function SceneInner({
@@ -641,6 +688,7 @@ function SceneInner({
   onAnomalyClick,
   onDrawPoint,
   interactingRef,
+  onBootProgress,
 }: {
   trajectories: FloatTrajectory[];
   anomalies: OceanAnomaly[];
@@ -652,9 +700,11 @@ function SceneInner({
   onAnomalyClick?: (a: OceanAnomaly, screenPos: { x: number; y: number }) => void;
   onDrawPoint: (p: TransectPoint) => void;
   interactingRef: MutableRefObject<boolean>;
+  onBootProgress?: (progress: number) => void;
 }) {
   return (
     <>
+      <SceneBootReporter onBootProgress={onBootProgress} />
       <PerspectiveCamera makeDefault position={[0, 0.5, 6.8]} fov={40} near={0.1} far={100} />
 
       {/* Lights */}
@@ -708,6 +758,7 @@ export default function OceanScene({
   onCursorChange,
   onPlayingChange,
   drawing = false,
+  onBootProgress,
 }: OceanSceneProps) {
   const [showAnomalies] = useState(true);
   const [drawPoints, setDrawPoints] = useState<TransectPoint[]>([]);
@@ -766,6 +817,7 @@ export default function OceanScene({
           onAnomalyClick={onAnomalyClick}
           onDrawPoint={(pt) => setDrawPoints((prev) => [...prev, pt])}
           interactingRef={interactingRef}
+          onBootProgress={onBootProgress}
         />
       </Canvas>
 

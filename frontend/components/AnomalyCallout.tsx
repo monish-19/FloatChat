@@ -8,6 +8,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import type { OceanAnomaly } from './OceanScene';
+import { EyebrowReveal, HeadingReveal } from '@/components/SplitReveal';
 
 type AnomalyCalloutProps = {
   anomaly: OceanAnomaly;
@@ -127,21 +128,29 @@ export default function AnomalyCallout({
         {/* Header */}
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 10 }}>
           <div>
-            <div className="eyebrow" style={{ color: accentColor }}>
-              {severe ? 'Severe anomaly' : 'Anomaly detected'}
-            </div>
-            <div style={{
-              fontFamily: 'var(--font-ui)',
-              fontSize: 14,
-              fontWeight: 600,
-              color: 'var(--foam-100)',
-              marginTop: 2,
-              letterSpacing: '-0.01em',
-            }}>
-              {anomaly.variable
-                ? anomaly.variable.charAt(0).toUpperCase() + anomaly.variable.slice(1)
-                : 'Ocean event'}
-            </div>
+            <EyebrowReveal
+              text={severe ? 'Severe anomaly' : 'Anomaly detected'}
+              className="eyebrow"
+              style={{ color: accentColor }}
+              staggerMs={20}
+            />
+            <HeadingReveal
+              text={
+                anomaly.variable
+                  ? anomaly.variable.charAt(0).toUpperCase() + anomaly.variable.slice(1)
+                  : 'Ocean event'
+              }
+              style={{
+                fontFamily: 'var(--font-ui)',
+                fontSize: 14,
+                fontWeight: 600,
+                color: 'var(--foam-100)',
+                marginTop: 2,
+                letterSpacing: '-0.01em',
+              }}
+              staggerMs={60}
+              delayMs={100}
+            />
           </div>
           <button
             type="button"

@@ -7,6 +7,7 @@
 ───────────────────────────────────────────────────────────── */
 
 import { FormEvent, useEffect, useRef, useState } from 'react';
+import { EyebrowReveal, HeadingReveal } from '@/components/SplitReveal';
 
 type Message = {
   role: 'user' | 'assistant';
@@ -138,17 +139,20 @@ export default function ChatPanel({ questionSeed, collapsed = false, onCollapsed
       >
         {!collapsed && (
           <div>
-            <div className="eyebrow">Ocean query</div>
-            <div style={{
-              fontFamily: 'var(--font-ui)',
-              fontSize: 15,
-              fontWeight: 600,
-              color: 'var(--foam-100)',
-              letterSpacing: '-0.01em',
-              marginTop: 1,
-            }}>
-              FloatChat
-            </div>
+            <EyebrowReveal text="Ocean query" className="eyebrow" staggerMs={22} />
+            <HeadingReveal
+              text="FloatChat"
+              style={{
+                fontFamily: 'var(--font-ui)',
+                fontSize: 15,
+                fontWeight: 600,
+                color: 'var(--foam-100)',
+                letterSpacing: '-0.01em',
+                marginTop: 1,
+              }}
+              staggerMs={55}
+              delayMs={90}
+            />
           </div>
         )}
 

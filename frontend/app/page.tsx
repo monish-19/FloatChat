@@ -12,15 +12,24 @@
      z-30 AnomalyCallout (positioned over 3D marker)
      z-35 Transect scrim
      z-40 TransectSheet (bottom sheet)
+     z-50 SectionNav (vertical desktop / bottom mobile)
 ───────────────────────────────────────────────────────────── */
 
 import dynamic from 'next/dynamic';
 import { useEffect, useMemo, useRef, useState } from 'react';
+import EntryGate from '@/components/EntryGate';
+import CustomCursor from '@/components/CustomCursor';
 import ChatPanel from '@/components/ChatPanel';
 import HudCluster from '@/components/HudCluster';
 import TimelineScrubber from '@/components/TimelineScrubber';
 import AnomalyCallout from '@/components/AnomalyCallout';
 import TransectSheet from '@/components/TransectSheet';
+import SectionNav from '@/components/SectionNav';
+import SectionLayer from '@/components/SectionLayer';
+import AnomalySectionPanel from '@/components/AnomalySectionPanel';
+import TransectSectionHint from '@/components/TransectSectionHint';
+import { EyebrowReveal } from '@/components/SplitReveal';
+import { sectionIndex, type DashboardSectionId } from '@/lib/sections';
 import type { FloatTrajectory, OceanAnomaly, TransectPoint } from '@/components/OceanScene';
 
 /* Dynamically imported — R3F must be client-only, no SSR */
@@ -79,9 +88,32 @@ export default function Page() {
   const [anomalyScreenPos, setAnomalyScreenPos] = useState<{ x: number; y: number } | null>(null);
   const [anomalySeed, setAnomalySeed] = useState<string | undefined>();
 
+  /* ── Section nav state (Task 3) ──────────────────────────── */
+  const [activeSection, setActiveSection] = useState<DashboardSectionId>('telemetry');
+  const [navDirection, setNavDirection] = useState(0);
+
+  const handleSectionChange = (id: DashboardSectionId) => {
+    setNavDirection(sectionIndex(id) > sectionIndex(activeSection) ? 1 : -1);
+    setActiveSection(id);
+  };
+
   /* ── Timeline state ─────────────────────────────────────── */
   const [cursor, setCursor] = useState(1);
   const [playing, setPlaying] = useState(false);
+
+  /* ── Entry sequence (Task 1) ────────────────────────────── */
+  const [sceneBootProgress, setSceneBootProgress] = useState(0);
+  const [oceanChunkReady, setOceanChunkReady] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    import('@/components/OceanScene').then(() => {
+      if (active) setOceanChunkReady(true);
+    });
+    return () => {
+      active = false;
+    };
+  }, []);
 
   /* ── Parallax ───────────────────────────────────────────── */
   const parallaxRef = useRef({ x: 0, y: 0 });
@@ -213,6 +245,8 @@ export default function Page() {
   };
 
   return (
+    <EntryGate sceneBootProgress={sceneBootProgress} chunkReady={oceanChunkReady}>
+      <CustomCursor />
     <main
       style={{
         position: 'fixed',
@@ -235,6 +269,7 @@ export default function Page() {
           onCursorChange={setCursor}
           onPlayingChange={setPlaying}
           drawing={drawing}
+          onBootProgress={setSceneBootProgress}
         />
       </div>
 
@@ -265,6 +300,99 @@ export default function Page() {
         isLive={isLive}
       />
 
+      {/* ── z-10: Section content layers (crossfade+slide) ── */}
+
+      {/* 01 Telemetry — glanceable trajectory / profile readout */}
+      <SectionLayer id="telemetry" active={activeSection === 'telemetry'} direction={navDirection}>
+        {/* Telemetry section: the 3D scene IS the content; this layer is intentionally minimal */}
+        <div
+          key={activeSection === 'telemetry' ? 'tel-active' : 'tel-inactive'}
+          style={{
+            position: 'fixed',
+            top: 16,
+            left: 196,
+            zIndex: 15,
+            pointerEvents: 'none',
+          }}
+        >
+          <EyebrowReveal text="Active telemetry" className="eyebrow" style={{ marginBottom: 4 }} staggerMs={20} />
+          <p
+            className="mono"
+            style={{
+              margin: 0,
+              fontSize: 12,
+              color: 'var(--foam-400)',
+              letterSpacing: '0.04em',
+            }}
+          >
+            {trajectories.length > 0
+              ? `${trajectories.length} float${trajectories.length === 1 ? '' : 's'} tracked`
+              : 'Waiting for telemetry'}
+          </p>
+        </div>
+      </SectionLayer>
+
+      {/* 02 Traces — trajectory-specific context */}
+      <SectionLayer id="traces" active={activeSection === 'traces'} direction={navDirection}>
+        <div
+          key={activeSection === 'traces' ? 'traces-active' : 'traces-inactive'}
+          style={{
+            position: 'fixed',
+            top: 16,
+            left: 196,
+            width: 'min(280px, calc(100vw - 212px))',
+            zIndex: 15,
+            padding: '16px',
+          }}
+          className="glass-panel"
+        >
+          <EyebrowReveal text="Float traces" className="eyebrow" style={{ marginBottom: 6 }} staggerMs={22} />
+          <p
+            className="mono"
+            style={{ margin: 0, fontSize: 12, color: 'var(--foam-400)' }}
+          >
+            {trajectories.length === 0
+              ? 'No trajectory data'
+              : `${trajectories.length} float${trajectories.length === 1 ? '' : 's'} · ${trajectories.reduce((n, t) => n + t.path.length, 0).toLocaleString()} profile${trajectories.reduce((n, t) => n + t.path.length, 0) === 1 ? '' : 's'}`}
+          </p>
+          <p
+            style={{
+              margin: '8px 0 0',
+              fontSize: 12,
+              color: 'var(--foam-400)',
+              fontFamily: 'var(--font-ui)',
+            }}
+          >
+            Hover a float path in the scene to inspect its depth profile.
+          </p>
+        </div>
+      </SectionLayer>
+
+      {/* 03 Transects — cross-section draw tool */}
+      <SectionLayer id="transects" active={activeSection === 'transects'} direction={navDirection}>
+        <TransectSectionHint
+          drawing={drawing}
+          drawnPoints={drawnPoints.length}
+          onDrawToggle={handleDrawToggle}
+        />
+      </SectionLayer>
+
+      {/* 04 Anomalies — live event feed */}
+      <SectionLayer id="anomalies" active={activeSection === 'anomalies'} direction={navDirection}>
+        <AnomalySectionPanel
+          anomalies={anomalies}
+          onSelect={(a) => {
+            /* Re-use the same callout flow — pop the anomaly callout with a synthetic
+               centred position since we don't have a 3D screen-projection here. */
+            setSelectedAnomaly(a);
+            setAnomalyScreenPos({ x: window.innerWidth * 0.6, y: window.innerHeight * 0.35 });
+          }}
+        />
+      </SectionLayer>
+
+      {/* ── z-50: Numbered section nav ────────────────────── */}
+      <SectionNav active={activeSection} onChange={handleSectionChange} />
+
       {/* ── z-30: Anomaly callout (if selected) ──────────── */}
       {selectedAnomaly && anomalyScreenPos && (
         <AnomalyCallout
@@ -290,5 +418,6 @@ export default function Page() {
         />
       )}
     </main>
+    </EntryGate>
   );
 }

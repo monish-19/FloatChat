@@ -3,132 +3,208 @@
 import { useReducedMotion } from 'framer-motion';
 import { useEffect, useMemo, useRef, useState } from 'react';
 
-type Ripple = { id: number; x: number; y: number };
+type TrailParticle = {
+  x: number;
+  y: number;
+  life: number;
+  size: number;
+};
 
-const INTERACTIVE_SELECTOR = 'button, a, input, select, textarea, [role="button"], .panel, [data-cursor="interactive"]';
+const INTERACTIVE_SELECTOR = [
+  'button',
+  'a',
+  'input',
+  'select',
+  'textarea',
+  'label',
+  '[role="button"]',
+  '[role="tab"]',
+  '[role="slider"]',
+  '[role="switch"]',
+  '.panel',
+  '.panel-mount',
+  '.glass-panel-interactive',
+  '.tilt-card',
+  '.btn-bio',
+  '.ocean-input',
+  '[data-cursor="interactive"]',
+].join(', ');
+
+const MAX_PARTICLES = 28;
+const PARTICLE_POOL = 28;
+
+function clamp(v: number, lo: number, hi: number) {
+  return Math.min(hi, Math.max(lo, v));
+}
 
 export default function CustomCursor() {
-  const reduceMotion = useReducedMotion();
-  const [touchDevice, setTouchDevice] = useState(false);
-  const [ripples, setRipples] = useState<Ripple[]>([]);
-  const pointer = useRef({ x: 0, y: 0, visible: false });
-  const eased = useRef({ x: 0, y: 0 });
-  const ring = useRef<HTMLDivElement>(null);
-  const dot = useRef<HTMLDivElement>(null);
-  const trail = useRef(Array.from({ length: 6 }, () => ({ x: 0, y: 0 })));
-  const trailRefs = useRef<(HTMLDivElement | null)[]>([]);
+  const motionReduced = useReducedMotion();
+  const [active, setActive] = useState(false);
+
+  const pointer = useRef({ x: -100, y: -100, visible: false });
+  const prevPointer = useRef({ x: -100, y: -100, t: 0 });
+  const velocity = useRef(0);
+  const dot = useRef({ x: -100, y: -100 });
+  const ring = useRef({ x: -100, y: -100 });
+  const ringScale = useRef(1);
+  const dotScale = useRef(1);
   const interactive = useRef(false);
 
-  useEffect(() => {
-    const hasTouch = window.matchMedia('(pointer: coarse)').matches;
-    setTouchDevice(hasTouch);
-  }, []);
+  const dotRef = useRef<HTMLDivElement>(null);
+  const ringRef = useRef<HTMLDivElement>(null);
+  const glowRef = useRef<HTMLDivElement>(null);
+  const particleRefs = useRef<(HTMLSpanElement | null)[]>([]);
+  const particles = useRef<TrailParticle[]>([]);
 
   useEffect(() => {
-    if (reduceMotion || touchDevice) return;
+    const coarse = window.matchMedia('(pointer: coarse)').matches;
+    const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    setActive(!coarse && !reduced && motionReduced !== true);
+  }, [motionReduced]);
+
+  useEffect(() => {
+    if (!active) return;
     document.body.classList.add('custom-cursor-active');
 
     let frame = 0;
-    const update = () => {
-      eased.current.x += (pointer.current.x - eased.current.x) * 0.18;
-      eased.current.y += (pointer.current.y - eased.current.y) * 0.18;
+    const loop = () => {
+      const follow = interactive.current ? 0.52 : 0.2;
+      const ringFollow = interactive.current ? 0.38 : 0.14;
 
-      if (dot.current) {
-        dot.current.style.transform = `translate3d(${eased.current.x}px, ${eased.current.y}px, 0)`;
-        dot.current.style.opacity = pointer.current.visible ? '1' : '0';
+      dot.current.x += (pointer.current.x - dot.current.x) * follow;
+      dot.current.y += (pointer.current.y - dot.current.y) * follow;
+      ring.current.x += (pointer.current.x - ring.current.x) * ringFollow;
+      ring.current.y += (pointer.current.y - ring.current.y) * ringFollow;
+
+      const targetRing = interactive.current ? 1.72 : 1;
+      const targetDot = interactive.current ? 1.35 : 1;
+      ringScale.current += (targetRing - ringScale.current) * (interactive.current ? 0.42 : 0.16);
+      dotScale.current += (targetDot - dotScale.current) * (interactive.current ? 0.45 : 0.18);
+
+      const speed = velocity.current;
+      const trailIntensity = clamp(speed / 900, 0, 1);
+      const visible = pointer.current.visible;
+
+      if (dotRef.current) {
+        dotRef.current.style.transform = `translate3d(${dot.current.x}px, ${dot.current.y}px, 0) scale(${dotScale.current})`;
+        dotRef.current.style.opacity = visible ? '1' : '0';
       }
-      if (ring.current) {
-        ring.current.style.transform = `translate3d(${eased.current.x}px, ${eased.current.y}px, 0) scale(${interactive.current ? 1.55 : 1})`;
-        ring.current.style.opacity = pointer.current.visible ? '1' : '0';
+      if (ringRef.current) {
+        ringRef.current.style.transform = `translate3d(${ring.current.x}px, ${ring.current.y}px, 0) scale(${ringScale.current})`;
+        ringRef.current.style.opacity = visible ? String(0.55 + trailIntensity * 0.35) : '0';
+      }
+      if (glowRef.current) {
+        const glowSize = 18 + trailIntensity * 36;
+        glowRef.current.style.transform = `translate3d(${dot.current.x}px, ${dot.current.y}px, 0) scale(${1 + trailIntensity * 0.8})`;
+        glowRef.current.style.width = `${glowSize}px`;
+        glowRef.current.style.height = `${glowSize}px`;
+        glowRef.current.style.marginLeft = `${-glowSize / 2}px`;
+        glowRef.current.style.marginTop = `${-glowSize / 2}px`;
+        glowRef.current.style.opacity = visible ? String(0.12 + trailIntensity * 0.38) : '0';
       }
 
-      trail.current.forEach((bubble, index) => {
-        const follow = index === 0 ? eased.current : trail.current[index - 1];
-        bubble.x += (follow.x - bubble.x) * (0.12 - index * 0.012);
-        bubble.y += (follow.y - bubble.y) * (0.12 - index * 0.012);
-        const bubbleNode = trailRefs.current[index];
-        if (bubbleNode) {
-          bubbleNode.style.transform = `translate3d(${bubble.x}px, ${bubble.y}px, 0) scale(${1 - index * 0.1})`;
-          bubbleNode.style.opacity = pointer.current.visible ? `${0.28 - index * 0.03}` : '0';
+      for (let i = particles.current.length - 1; i >= 0; i -= 1) {
+        const p = particles.current[i];
+        p.life -= 0.035 + trailIntensity * 0.02;
+        if (p.life <= 0) particles.current.splice(i, 1);
+      }
+
+      particleRefs.current.forEach((node, index) => {
+        if (!node) return;
+        const p = particles.current[index];
+        if (!p || !visible) {
+          node.style.opacity = '0';
+          return;
         }
+        node.style.transform = `translate3d(${p.x}px, ${p.y}px, 0) scale(${p.size * p.life})`;
+        node.style.opacity = String(p.life * (0.15 + trailIntensity * 0.55));
       });
 
-      frame = window.requestAnimationFrame(update);
+      velocity.current *= 0.86;
+      frame = window.requestAnimationFrame(loop);
     };
 
-    frame = window.requestAnimationFrame(update);
+    frame = window.requestAnimationFrame(loop);
     return () => {
       window.cancelAnimationFrame(frame);
       document.body.classList.remove('custom-cursor-active');
     };
-  }, [reduceMotion, touchDevice]);
+  }, [active]);
 
   useEffect(() => {
-    if (reduceMotion) return;
+    if (!active) return;
+
+    const spawnParticle = (x: number, y: number, speed: number) => {
+      if (particles.current.length >= MAX_PARTICLES) particles.current.shift();
+      const size = 0.35 + clamp(speed / 520, 0, 1) * 1.1;
+      particles.current.push({ x, y, life: 1, size });
+    };
 
     const onMove = (event: PointerEvent) => {
+      const now = performance.now();
+      const dt = Math.max(8, now - (prevPointer.current.t || now));
+      const dx = event.clientX - prevPointer.current.x;
+      const dy = event.clientY - prevPointer.current.y;
+      const speed = (Math.hypot(dx, dy) / dt) * 1000;
+      velocity.current = speed;
+
+      if (speed > 48 && prevPointer.current.t > 0) {
+        const steps = clamp(Math.floor(speed / 220), 1, 3);
+        for (let i = 0; i < steps; i += 1) {
+          const t = (i + 1) / (steps + 1);
+          spawnParticle(
+            prevPointer.current.x + dx * t,
+            prevPointer.current.y + dy * t,
+            speed,
+          );
+        }
+      }
+
       pointer.current.x = event.clientX;
       pointer.current.y = event.clientY;
       pointer.current.visible = true;
+      prevPointer.current = { x: event.clientX, y: event.clientY, t: now };
+
       const target = event.target as Element | null;
       interactive.current = Boolean(target?.closest(INTERACTIVE_SELECTOR));
     };
+
     const onEnter = () => {
       pointer.current.visible = true;
     };
     const onLeave = () => {
       pointer.current.visible = false;
     };
-    const onTouch = (event: TouchEvent) => {
-      if (!touchDevice) return;
-      const point = event.touches[0];
-      if (!point) return;
-      const id = Date.now();
-      setRipples((current) => [...current, { id, x: point.clientX, y: point.clientY }]);
-      window.setTimeout(() => {
-        setRipples((current) => current.filter((ripple) => ripple.id !== id));
-      }, 540);
-    };
 
     window.addEventListener('pointermove', onMove, { passive: true });
     window.addEventListener('pointerenter', onEnter);
     window.addEventListener('pointerleave', onLeave);
-    window.addEventListener('touchstart', onTouch, { passive: true });
 
     return () => {
       window.removeEventListener('pointermove', onMove);
       window.removeEventListener('pointerenter', onEnter);
       window.removeEventListener('pointerleave', onLeave);
-      window.removeEventListener('touchstart', onTouch);
     };
-  }, [reduceMotion, touchDevice]);
+  }, [active]);
 
-  const bubbles = useMemo(() => Array.from({ length: 6 }), []);
+  const pool = useMemo(() => Array.from({ length: PARTICLE_POOL }), []);
+
+  if (!active) return null;
 
   return (
-    <>
-      {!reduceMotion && !touchDevice && (
-        <div className="pointer-events-none fixed inset-0 z-[90]">
-          {bubbles.map((_, index) => (
-            <div
-              key={`trail-${index}`}
-              ref={(node) => {
-                trailRefs.current[index] = node;
-              }}
-              className="cursor-bubble"
-            />
-          ))}
-          <div ref={ring} className="cursor-ring" />
-          <div ref={dot} className="cursor-dot" />
-        </div>
-      )}
-      {touchDevice && (
-        <div className="pointer-events-none fixed inset-0 z-[90]">
-          {ripples.map((ripple) => (
-            <span key={ripple.id} className="tap-ripple" style={{ left: ripple.x, top: ripple.y }} />
-          ))}
-        </div>
-      )}
-    </>
+    <div className="pointer-events-none fixed inset-0 z-[150]" aria-hidden>
+      {pool.map((_, index) => (
+        <span
+          key={`cursor-particle-${index}`}
+          ref={(node) => {
+            particleRefs.current[index] = node;
+          }}
+          className="cursor-particle"
+        />
+      ))}
+      <div ref={glowRef} className="cursor-glow" />
+      <div ref={ringRef} className="cursor-ring" />
+      <div ref={dotRef} className="cursor-dot" />
+    </div>
   );
 }

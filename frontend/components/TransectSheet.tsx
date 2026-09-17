@@ -7,6 +7,7 @@
 ───────────────────────────────────────────────────────────── */
 
 import { useEffect, useRef, useState } from 'react';
+import { EyebrowReveal, HeadingReveal } from '@/components/SplitReveal';
 
 type Transect = {
   variable: 'temperature' | 'salinity';
@@ -135,17 +136,20 @@ export default function TransectSheet({
           borderBottom: '1px solid rgba(19,30,48,0.9)',
         }}>
           <div>
-            <div className="eyebrow">Observed transect</div>
-            <div style={{
-              fontFamily: 'var(--font-ui)',
-              fontSize: 16,
-              fontWeight: 600,
-              color: 'var(--foam-100)',
-              marginTop: 2,
-              letterSpacing: '-0.01em',
-            }}>
-              {variable === 'temperature' ? 'Temperature' : 'Salinity'} cross-section
-            </div>
+            <EyebrowReveal text="Observed transect" className="eyebrow" staggerMs={20} />
+            <HeadingReveal
+              text={`${variable === 'temperature' ? 'Temperature' : 'Salinity'} cross-section`}
+              style={{
+                fontFamily: 'var(--font-ui)',
+                fontSize: 16,
+                fontWeight: 600,
+                color: 'var(--foam-100)',
+                marginTop: 2,
+                letterSpacing: '-0.01em',
+              }}
+              staggerMs={55}
+              delayMs={110}
+            />
             {drawnPoints >= 2 && (
               <div style={{ fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--bio-400)', marginTop: 2 }}>
                 · custom route · {drawnPoints} points

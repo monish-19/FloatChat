@@ -64,6 +64,7 @@ export default function HudCluster({ profileCount, anomalyCount, latencyMs, isLi
       }}
       role="status"
       aria-label="System status readouts"
+      data-cursor="interactive"
     >
       {/* Profiles */}
       <HudCell label="Profiles" isAlert={false}>
