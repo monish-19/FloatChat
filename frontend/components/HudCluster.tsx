@@ -6,8 +6,7 @@
    No cards-in-cards. One glass strip, three data points.
 ───────────────────────────────────────────────────────────── */
 
-import { animate, motion, useMotionValue } from 'framer-motion';
-import { useEffect, useState } from 'react';
+import AnimatedNum from '@/components/AnimatedNum';
 
 type HudProps = {
   profileCount: number | null;
@@ -16,35 +15,13 @@ type HudProps = {
   isLive: boolean;
 };
 
-function AnimatedNum({ target }: { target: number | null }) {
-  const [display, setDisplay] = useState<number | null>(target === null ? null : 0);
-  const value = useMotionValue(target ?? 0);
-
-  useEffect(() => {
-    if (target === null) {
-      setDisplay(null);
-      return;
-    }
-
-    const controls = animate(value, target, {
-      duration: 0.65,
-      ease: [0.22, 1, 0.36, 1],
-      onUpdate: (latest) => setDisplay(Math.round(latest)),
-    });
-
-    return () => controls.stop();
-  }, [target, value]);
-
-  if (display === null) return <span style={{ opacity: 0.3 }}>—</span>;
-  return <motion.span aria-live="polite">{display.toLocaleString()}</motion.span>;
-}
-
 export default function HudCluster({ profileCount, anomalyCount, latencyMs, isLive }: HudProps) {
   const hasAnomaly = anomalyCount !== null && anomalyCount > 0;
 
   return (
     <div
-      className="panel-mount parallax-layer parallax-layer--far"
+      className="panel-mount glass-panel parallax-layer parallax-layer--far"
+      data-parallax="far"
       style={{
         position: 'fixed',
         top: 16,
@@ -54,8 +31,6 @@ export default function HudCluster({ profileCount, anomalyCount, latencyMs, isLi
         alignItems: 'stretch',
         gap: 0,
         background: 'rgba(10,18,32,0.82)',
-        backdropFilter: 'blur(16px) saturate(1.4)',
-        WebkitBackdropFilter: 'blur(16px) saturate(1.4)',
         border: '1px solid rgba(19,30,48,0.9)',
         borderRadius: 10,
         overflow: 'hidden',

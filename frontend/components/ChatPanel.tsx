@@ -8,6 +8,7 @@
 
 import { FormEvent, useEffect, useRef, useState } from 'react';
 import { EyebrowReveal, HeadingReveal } from '@/components/SplitReveal';
+import AnimatedNum from '@/components/AnimatedNum';
 
 type Message = {
   role: 'user' | 'assistant';
@@ -107,6 +108,8 @@ export default function ChatPanel({ questionSeed, collapsed = false, onCollapsed
     <div
       id="chat-panel"
       className="chat-panel-enter parallax-layer parallax-layer--near"
+      data-parallax="near"
+      data-surface="overlay"
       style={{
         position: 'fixed',
         left: 0,
@@ -236,6 +239,8 @@ export default function ChatPanel({ questionSeed, collapsed = false, onCollapsed
                 }}
               >
                 <div
+                  className="nested-surface"
+                  data-surface="nested"
                   style={{
                     maxWidth: '88%',
                     borderRadius: msg.role === 'user' ? '10px 10px 3px 10px' : '10px 10px 10px 3px',
@@ -282,12 +287,15 @@ export default function ChatPanel({ questionSeed, collapsed = false, onCollapsed
                         letterSpacing: '0.02em',
                         marginLeft: 2,
                       }}>
-                        {msg.details.matchCount} matches
+                        <AnimatedNum target={msg.details.matchCount} /> matches
                       </span>
                     </div>
                   )}
                   {msg.details && (
-                    <div style={{
+                    <div
+                      className="nested-surface pipeline-trace"
+                      data-surface="nested"
+                      style={{
                       fontFamily: 'var(--font-mono)',
                       fontSize: 9,
                       color: 'var(--foam-400)',
@@ -297,7 +305,9 @@ export default function ChatPanel({ questionSeed, collapsed = false, onCollapsed
                       gap: '0 8px',
                     }}>
                       {Object.entries(msg.details.latency).map(([k, v]) => (
-                        <span key={k}>{k.replace('_ms', '')}: {v} ms</span>
+                        <span key={k}>
+                          {k.replace('_ms', '')}: <AnimatedNum target={Number(v)} format={(n) => `${n} ms`} />
+                        </span>
                       ))}
                     </div>
                   )}
@@ -308,7 +318,10 @@ export default function ChatPanel({ questionSeed, collapsed = false, onCollapsed
             {/* Loading indicator */}
             {isLoading && (
               <div style={{ display: 'flex', justifyContent: 'flex-start' }}>
-                <div style={{
+                <div
+                  className="nested-surface"
+                  data-surface="nested"
+                  style={{
                   background: 'rgba(19,30,48,0.7)',
                   border: '1px solid rgba(19,30,48,0.9)',
                   borderRadius: '10px 10px 10px 3px',

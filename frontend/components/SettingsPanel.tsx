@@ -127,11 +127,15 @@ export default function SettingsPanel({ quality, soundEnabled, onQualityChange, 
 
   useEffect(() => { return () => { soundEngineRef.current?.stop(); }; }, []);
 
-  const glass: React.CSSProperties = {
+  const overlayGlass: React.CSSProperties = {
     background: 'rgba(10,18,32,0.92)',
     backdropFilter: 'blur(20px) saturate(1.4)',
     WebkitBackdropFilter: 'blur(20px) saturate(1.4)',
     border: '1px solid rgba(19,30,48,0.95)',
+  };
+  const nestedControl: React.CSSProperties = {
+    background: 'rgba(3,7,17,0.55)',
+    border: '1px solid rgba(19,30,48,0.9)',
   };
 
   return (
@@ -144,7 +148,7 @@ export default function SettingsPanel({ quality, soundEnabled, onQualityChange, 
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: rm ? 0 : 6, scale: rm ? 1 : 0.97 }}
             transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
-            style={{ ...glass, borderRadius: 12, padding: '16px 18px', width: 220, display: 'flex', flexDirection: 'column', gap: 16 }}
+            style={{ ...overlayGlass, borderRadius: 12, padding: '16px 18px', width: 220, display: 'flex', flexDirection: 'column', gap: 16 }}
             data-cursor="interactive"
           >
             {/* Sound */}
@@ -156,7 +160,7 @@ export default function SettingsPanel({ quality, soundEnabled, onQualityChange, 
                 onClick={() => onSoundChange(!soundEnabled)}
                 aria-pressed={soundEnabled}
                 aria-label={soundEnabled ? 'Disable ambient sound' : 'Enable ambient sound'}
-                style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', background: soundEnabled ? 'rgba(45,212,191,0.10)' : 'rgba(3,7,17,0.5)', border: soundEnabled ? '1px solid rgba(45,212,191,0.4)' : '1px solid rgba(19,30,48,0.9)', borderRadius: 8, padding: '8px 12px', color: soundEnabled ? 'var(--bio-400)' : 'var(--foam-400)', cursor: 'pointer', transition: 'all 160ms ease', fontFamily: 'var(--font-ui)', fontSize: 13, fontWeight: 500 }}
+                style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', ...nestedControl, background: soundEnabled ? 'rgba(45,212,191,0.10)' : 'rgba(3,7,17,0.5)', border: soundEnabled ? '1px solid rgba(45,212,191,0.4)' : '1px solid rgba(19,30,48,0.9)', borderRadius: 8, padding: '8px 12px', color: soundEnabled ? 'var(--bio-400)' : 'var(--foam-400)', cursor: 'pointer', transition: 'all 160ms ease', fontFamily: 'var(--font-ui)', fontSize: 13, fontWeight: 500 }}
               >
                 <span style={{ flexShrink: 0 }}>{soundEnabled ? <SoundOnIcon /> : <SoundOffIcon />}</span>
                 <span style={{ flex: 1, textAlign: 'left' }}>{soundEnabled ? 'On \u00b7 water drone' : 'Off'}</span>
@@ -204,7 +208,7 @@ export default function SettingsPanel({ quality, soundEnabled, onQualityChange, 
         whileTap={{ scale: rm ? 1 : 0.94 }}
         transition={{ type: 'spring', stiffness: 400, damping: 26 }}
         data-cursor="interactive"
-        style={{ display: 'flex', alignItems: 'center', gap: 7, padding: '7px 12px', ...glass, borderRadius: 8, color: open ? 'var(--bio-400)' : 'var(--foam-400)', fontFamily: 'var(--font-ui)', fontSize: 12, fontWeight: 500, cursor: 'pointer', transition: 'background 150ms ease, border-color 150ms ease, color 150ms ease', background: open ? 'rgba(45,212,191,0.10)' : 'rgba(10,18,32,0.85)', border: open ? '1px solid rgba(45,212,191,0.4)' : '1px solid rgba(19,30,48,0.9)' }}
+        style={{ display: 'flex', alignItems: 'center', gap: 7, padding: '7px 12px', ...overlayGlass, borderRadius: 8, color: open ? 'var(--bio-400)' : 'var(--foam-400)', fontFamily: 'var(--font-ui)', fontSize: 12, fontWeight: 500, cursor: 'pointer', transition: 'background 150ms ease, border-color 150ms ease, color 150ms ease', background: open ? 'rgba(45,212,191,0.10)' : 'rgba(10,18,32,0.85)', border: open ? '1px solid rgba(45,212,191,0.4)' : '1px solid rgba(19,30,48,0.9)' }}
       >
         <SettingsGearIcon />
         <span style={{ fontFamily: 'var(--font-mono)', fontSize: 10, letterSpacing: '0.06em', textTransform: 'uppercase' }}>

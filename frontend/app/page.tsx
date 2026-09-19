@@ -29,8 +29,10 @@ import SectionNav from '@/components/SectionNav';
 import SectionLayer from '@/components/SectionLayer';
 import AnomalySectionPanel from '@/components/AnomalySectionPanel';
 import TransectSectionHint from '@/components/TransectSectionHint';
+import MiniTrajectoryMap from '@/components/MiniTrajectoryMap';
 import SettingsPanel from '@/components/SettingsPanel';
 import { EyebrowReveal } from '@/components/SplitReveal';
+import AnimatedNum from '@/components/AnimatedNum';
 import { sectionIndex, type DashboardSectionId } from '@/lib/sections';
 import { loadSettings, saveSettings, type QualityLevel } from '@/lib/settings';
 import type { FloatTrajectory, OceanAnomaly, TransectPoint } from '@/components/OceanScene';
@@ -145,29 +147,47 @@ export default function Page() {
   const parallaxRef = useRef({ x: 0, y: 0 });
   const parallaxTarget = useRef({ x: 0, y: 0 });
 
-  /* ── Mouse parallax ─────────────────────────────────────── */
+  /* ── Mouse + wheel parallax (layers consume different depths) ─ */
+  const scrollParallax = useRef(0);
+  const scrollTarget = useRef(0);
+
   useEffect(() => {
+    const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    if (reduced) return;
+
     const coarsePointer = window.matchMedia('(pointer: coarse)').matches;
-    if (coarsePointer) return;
 
     const onMove = (e: MouseEvent) => {
+      if (coarsePointer) return;
       parallaxTarget.current.x = clamp((e.clientX / window.innerWidth - 0.5) * 2, -1, 1);
       parallaxTarget.current.y = clamp((e.clientY / window.innerHeight - 0.5) * 2, -1, 1);
     };
+
+    const onWheel = (e: WheelEvent) => {
+      const node = e.target as HTMLElement | null;
+      if (node?.closest('.scroll-thread, textarea, input, [role="slider"]')) return;
+      scrollTarget.current = clamp(scrollTarget.current + e.deltaY * 0.0018, -1, 1);
+    };
+
     window.addEventListener('mousemove', onMove, { passive: true });
+    window.addEventListener('wheel', onWheel, { passive: true });
 
     let frame = 0;
     const loop = () => {
       parallaxRef.current.x += (parallaxTarget.current.x - parallaxRef.current.x) * 0.08;
       parallaxRef.current.y += (parallaxTarget.current.y - parallaxRef.current.y) * 0.08;
-      document.documentElement.style.setProperty('--parallax-x', String(parallaxRef.current.x));
-      document.documentElement.style.setProperty('--parallax-y', String(parallaxRef.current.y));
+      scrollParallax.current += (scrollTarget.current - scrollParallax.current) * 0.08;
+      const root = document.documentElement;
+      root.style.setProperty('--parallax-x', String(parallaxRef.current.x));
+      root.style.setProperty('--parallax-y', String(parallaxRef.current.y));
+      root.style.setProperty('--scroll-y', String(scrollParallax.current));
       frame = requestAnimationFrame(loop);
     };
     frame = requestAnimationFrame(loop);
 
     return () => {
       window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('wheel', onWheel);
       cancelAnimationFrame(frame);
     };
   }, []);
@@ -374,6 +394,7 @@ export default function Page() {
             padding: '16px',
           }}
           className="glass-panel parallax-layer parallax-layer--mid"
+          data-parallax="mid"
         >
           <EyebrowReveal text="Float traces" className="eyebrow" style={{ marginBottom: 6 }} staggerMs={22} />
           <p
@@ -382,8 +403,15 @@ export default function Page() {
           >
             {trajectories.length === 0
               ? 'No trajectory data'
-              : `${trajectories.length} float${trajectories.length === 1 ? '' : 's'} · ${trajectories.reduce((n, t) => n + t.path.length, 0).toLocaleString()} profile${trajectories.reduce((n, t) => n + t.path.length, 0) === 1 ? '' : 's'}`}
+              : (
+                <>
+                  <AnimatedNum target={trajectories.length} /> float{trajectories.length === 1 ? '' : 's'} ·{' '}
+                  <AnimatedNum target={trajectories.reduce((n, t) => n + t.path.length, 0)} /> profiles
+                </>
+              )}
           </p>
+          {/* Mini map — trajectory paths rendered from already-fetched data */}
+          <MiniTrajectoryMap trajectories={trajectories} />
           <p
             style={{
               margin: '8px 0 0',
@@ -410,6 +438,7 @@ export default function Page() {
       <SectionLayer id="anomalies" active={activeSection === 'anomalies'} direction={navDirection}>
         <AnomalySectionPanel
           anomalies={anomalies}
+          trajectories={trajectories}
           onSelect={(a) => {
             /* Re-use the same callout flow — pop the anomaly callout with a synthetic
                centred position since we don't have a 3D screen-projection here. */

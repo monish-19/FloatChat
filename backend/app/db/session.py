@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 load_dotenv()
 
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql+psycopg://floatchat:floatchat@localhost:5432/floatchat")
+DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://floatchat:floatchat@localhost:5432/floatchat")
 engine = create_engine(DATABASE_URL, pool_pre_ping=True, pool_size=5, max_overflow=10)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
 

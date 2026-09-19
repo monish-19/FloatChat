@@ -14,7 +14,11 @@ export default function TransectSectionHint({
   onDrawToggle,
 }: TransectSectionHintProps) {
   return (
-    <div className="transect-section-hint glass-panel" data-cursor="interactive">
+    <div
+      className="transect-section-hint glass-panel parallax-layer parallax-layer--mid"
+      data-parallax="mid"
+      data-cursor="interactive"
+    >
       <EyebrowReveal text="Cross-section" className="eyebrow" staggerMs={22} />
       <HeadingReveal
         as="p"

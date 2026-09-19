@@ -58,7 +58,8 @@ export default function TimelineScrubber({
   return (
     <div
       id="timeline-scrubber"
-      className="panel-mount"
+      className="panel-mount glass-panel parallax-layer parallax-layer--mid"
+      data-parallax="mid"
       style={{
         position: 'fixed',
         bottom: 0,
@@ -66,9 +67,9 @@ export default function TimelineScrubber({
         right: 0,
         zIndex: 10,
         background: 'rgba(10,18,32,0.88)',
-        backdropFilter: 'blur(20px) saturate(1.4)',
-        WebkitBackdropFilter: 'blur(20px) saturate(1.4)',
+        border: 'none',
         borderTop: '1px solid rgba(19,30,48,0.95)',
+        borderRadius: 0,
         padding: '10px 20px 12px',
       }}
       aria-label="Trajectory timeline scrubber"

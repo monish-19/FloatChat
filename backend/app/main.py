@@ -366,7 +366,9 @@ def anomalies(db: Session = Depends(get_db)) -> Dict[str, Any]:
         data = measurements.merge(profiles, on="profile_id")
     else:
         rows = db.execute(select(Profile, Measurement).join(Measurement, Measurement.profile_id == Profile.profile_id)).all()
-        data = pd.DataFrame([{"float_id": profile.float_id, "lat": profile.lat, "lon": profile.lon, "depth": measurement.depth, "temperature": measurement.temperature, "timestamp": profile.timestamp} for profile, measurement in rows])
+        data = pd.DataFrame([{"profile_id": profile.profile_id, "float_id": profile.float_id, "lat": profile.lat,
+                       "lon": profile.lon, "depth": measurement.depth, "temperature": measurement.temperature,
+                       "timestamp": profile.timestamp} for profile, measurement in rows])
     events: List[Dict[str, Any]] = []
     for profile_id, group in data.groupby("profile_id"):
         values = group["temperature"].to_numpy(dtype=float)

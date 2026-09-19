@@ -11,7 +11,8 @@ type SectionNavProps = {
 export default function SectionNav({ active, onChange }: SectionNavProps) {
   return (
     <nav
-      className="section-nav"
+      className="section-nav parallax-layer parallax-layer--near"
+      data-parallax="near"
       aria-label="Dashboard sections"
     >
       <div className="section-nav__list" role="tablist" aria-orientation="vertical">
