@@ -30,8 +30,8 @@ export default function HudCluster({ profileCount, anomalyCount, latencyMs, isLi
         display: 'flex',
         alignItems: 'stretch',
         gap: 0,
-        background: 'rgba(10,18,32,0.82)',
-        border: '1px solid rgba(19,30,48,0.9)',
+        background: 'rgba(10,18,32,0.72)',
+        border: '1px solid rgba(125,148,163,0.1)',
         borderRadius: 10,
         overflow: 'hidden',
       }}

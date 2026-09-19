@@ -358,13 +358,18 @@ export default function Page() {
           key={activeSection === 'telemetry' ? 'tel-active' : 'tel-inactive'}
           style={{
             position: 'fixed',
-            top: 16,
             left: 196,
+            bottom: 'calc(var(--edge) + 88px)',
+            maxWidth: 'min(42ch, 54vw)',
             zIndex: 15,
             pointerEvents: 'none',
           }}
         >
-          <EyebrowReveal text="Active telemetry" className="eyebrow" style={{ marginBottom: 4 }} staggerMs={20} />
+          <EyebrowReveal text="01 — Active telemetry" className="kicker" style={{ marginBottom: 14 }} staggerMs={18} />
+          <h1 className="display-xl" style={{ marginBottom: 16 }}>
+            The ocean,<br />
+            <span className="accent-line">in real time.</span>
+          </h1>
           <p
             className="mono"
             style={{
